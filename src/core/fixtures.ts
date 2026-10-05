@@ -1,4 +1,4 @@
-import { isoDate } from './calendar.ts';
+import { isoDate, lastYear, totalOf } from './calendar.ts';
 import type { ContributionDay, LanguageStat, ProfileData, RepoInfo } from './types.ts';
 
 /**
@@ -151,8 +151,8 @@ function demoCalendar(now: Date, since: string): ContributionDay[] {
 export function demoProfile(now: Date = DEMO_NOW): ProfileData {
   const createdAt = '2021-03-14T10:00:00Z';
   const calendar = demoCalendar(now, createdAt.slice(0, 10));
-  const lastYear = calendar.slice(-365);
-  const contributions = lastYear.reduce((s, d) => s + d.count, 0);
+  // GitHub's "last year": the same date a year ago through today.
+  const contributions = totalOf(lastYear(calendar, now));
   const totalBytes = new Map<string, LanguageStat>();
   for (const r of DEMO_REPOS) {
     for (const l of r.languages) {

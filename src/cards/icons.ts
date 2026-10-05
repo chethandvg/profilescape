@@ -7,7 +7,8 @@
  * monogram tile in the brand's colour, and anything unknown gets a neutral
  * monogram, so a requested icon is never broken or missing.
  */
-import { contrast, esc, mix, n } from '../core/svg.ts';
+import { own } from '../core/options.ts';
+import { contrast, ensureContrast, esc, n } from '../core/svg.ts';
 import { ICONS, type IconCategory } from './icons.generated.ts';
 
 export interface Icon {
@@ -132,7 +133,7 @@ export function slugify(input: string): string {
 
 function canonical(input: string): string {
   const slug = slugify(input);
-  return ALIASES[slug] ?? slug;
+  return own(ALIASES, slug) ?? slug;
 }
 
 /** "Objective C" → "OC", "Assembly" → "As", "F#" → "F#". */
@@ -151,11 +152,11 @@ function monogramText(input: string): string {
 export function resolveIcon(input: string): Icon {
   const raw = String(input ?? '').trim();
   const slug = canonical(raw);
-  const icon = ICONS[slug];
-  if (icon) return { slug, title: TITLES[slug] ?? icon.title, hex: `#${icon.hex}`, category: icon.category, path: icon.path, known: true };
-  const mono = MONOGRAMS[slug];
+  const icon = own(ICONS, slug);
+  if (icon) return { slug, title: own(TITLES, slug) ?? icon.title, hex: `#${icon.hex}`, category: icon.category, path: icon.path, known: true };
+  const mono = own(MONOGRAMS, slug);
   if (mono) return { slug, title: mono.title, hex: `#${mono.hex}`, category: mono.category, monogram: mono.text, known: true };
-  const glyph = GLYPHS[slug];
+  const glyph = own(GLYPHS, slug);
   if (glyph) return { slug, title: glyph.title, hex: '', category: 'generic', stroke: glyph.stroke, known: true };
   return { slug: slug || 'unknown', title: raw || 'Unknown', hex: '', category: 'generic', monogram: monogramText(raw), known: false };
 }
@@ -180,8 +181,8 @@ function saturation(c: string): number {
 
 /**
  * Brand colour adjusted until it reads against `bg`. Near-neutral brands
- * (black or white logos) switch to `ink` outright; coloured brands are blended
- * toward it step by step so they keep their hue.
+ * (black or white logos) switch to `ink` outright; coloured brands go through
+ * the shared ensureContrast(), which keeps their hue.
  */
 export function legible(color: string, bg: string, ink: string, base = 2.3): string {
   if (!/^#[0-9a-f]{6}$/i.test(color)) return ink;
@@ -191,11 +192,7 @@ export function legible(color: string, bg: string, ink: string, base = 2.3): str
   const min = Math.max(1.35, base - 1.1 * sat);
   if (contrast(color, bg) >= min) return color;
   if (sat < 0.14) return ink;
-  for (let k = 0.15; k < 1; k += 0.15) {
-    const c = mix(color, ink, k);
-    if (contrast(c, bg) >= min) return c;
-  }
-  return ink;
+  return ensureContrast(color, bg, min, ink);
 }
 
 /** Text colour for a filled brand tile: whichever of the two candidates contrasts more. */

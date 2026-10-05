@@ -63,8 +63,9 @@ inputs:
     default: ""
   include_private:
     description: >-
-      Include private repositories the token can read in aggregated statistics. Set to `false` for
-      public data only.
+      Include private repositories the token can read in repository and language statistics.
+      Contribution counts always follow what the token can see, so use the default workflow token
+      for public-only counts.
     required: false
     default: "true"
   repos:
@@ -93,8 +94,9 @@ inputs:
     default: "branch"
   branch:
     description: >-
-      Branch that holds the published SVG files. Created on first run and kept to a single commit,
-      so it never bloats your history.
+      Dedicated branch that holds the published SVG files. It is replaced wholesale on every publish
+      (a single commit, so it never bloats your history); Profilescape refuses to overwrite your
+      default branch or any branch it did not create.
     required: false
     default: "profilescape-output"
   commit_message:

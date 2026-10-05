@@ -13,6 +13,26 @@ function trim(x: number): string {
   return x.toFixed(1).replace(/\.0$/, '');
 }
 
+/**
+ * Short display names for GitHub languages whose official names are long or
+ * awkward on chips, code snippets and tiles. The languages card legend keeps
+ * the official names. Keys are lower case.
+ */
+const DISPLAY_NAMES: Readonly<Record<string, string>> = {
+  'jupyter notebook': 'Jupyter',
+  'visual basic .net': 'VB.NET',
+  'protocol buffer': 'Protobuf',
+  batchfile: 'Batch',
+  tsql: 'T-SQL',
+  plpgsql: 'PL/pgSQL',
+};
+
+/** "Jupyter Notebook" → "Jupyter"; other names pass through trimmed. */
+export function displayName(language: string): string {
+  const name = language.trim();
+  return Object.hasOwn(DISPLAY_NAMES, name.toLowerCase()) ? (DISPLAY_NAMES[name.toLowerCase()] as string) : name;
+}
+
 export function plural(count: number, one: string, many = `${one}s`): string {
   return count === 1 ? one : many;
 }
@@ -32,7 +52,7 @@ function parts(iso: string): { y: number; m: number; d: number } {
 export function shortDate(iso: string): string {
   if (!valid(iso)) return '';
   const { y, m, d } = parts(iso);
-  return `${MONTHS[m - 1]} ${String(d).padStart(2, '0')}, ${y}`;
+  return `${MONTHS[m - 1]} ${d}, ${y}`;
 }
 
 /** "Jan 2026" */

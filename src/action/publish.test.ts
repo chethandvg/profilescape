@@ -40,6 +40,17 @@ const FILES: PublishFile[] = [
 ];
 const REPO = '/repos/mira-dev/mira-dev';
 
+/** Routes that describe an existing branch made by an earlier publish (orphan commit with the snippet). */
+const ownedBranch = (commit: string, tree: string, extra: { parents?: { sha: string }[]; files?: string[]; defaultBranch?: string } = {}) => ({
+  [`GET ${REPO}/git/ref/heads/profilescape-output`]: { status: 200, body: { object: { sha: commit, type: 'commit' } } },
+  [`GET ${REPO}/git/commits/${commit}`]: { status: 200, body: { sha: commit, tree: { sha: tree }, parents: extra.parents ?? [] } },
+  [`GET ${REPO}`]: { status: 200, body: { default_branch: extra.defaultBranch ?? 'main' } },
+  [`GET ${REPO}/git/trees/${tree}`]: {
+    status: 200,
+    body: { sha: tree, tree: (extra.files ?? ['README-snippet.md', 'README.md', 'stats-dark.svg']).map((path) => ({ path, type: 'blob', mode: '100644' })) },
+  },
+});
+
 /** Answers blob uploads with the real git sha of the uploaded bytes. */
 const blobRoute: Handler = (c) => ({ status: 201, body: { sha: gitBlobSha(Buffer.from(c.body.content, 'base64')) } });
 
@@ -119,8 +130,7 @@ describe('publishToBranch', () => {
 
   it('force-updates an existing branch', async () => {
     const { calls, fetchImpl } = mockGitHub({
-      [`GET ${REPO}/git/ref/heads/profilescape-output`]: { status: 200, body: { object: { sha: 'old-commit', type: 'commit' } } },
-      [`GET ${REPO}/git/commits/old-commit`]: { status: 200, body: { tree: { sha: 'old-tree' } } },
+      ...ownedBranch('old-commit', 'old-tree'),
       [`POST ${REPO}/git/blobs`]: blobRoute,
       [`POST ${REPO}/git/trees`]: { status: 201, body: { sha: 'new-tree' } },
       [`POST ${REPO}/git/commits`]: { status: 201, body: { sha: 'new-commit' } },
@@ -149,8 +159,7 @@ describe('publishToBranch', () => {
 
   it('skips the commit when the API tree sha equals the existing tree', async () => {
     const { calls, fetchImpl } = mockGitHub({
-      [`GET ${REPO}/git/ref/heads/profilescape-output`]: { status: 200, body: { object: { sha: 'c1', type: 'commit' } } },
-      [`GET ${REPO}/git/commits/c1`]: { status: 200, body: { tree: { sha: 'same-tree' } } },
+      ...ownedBranch('c1', 'same-tree'),
       [`POST ${REPO}/git/blobs`]: blobRoute,
       [`POST ${REPO}/git/trees`]: { status: 201, body: { sha: 'same-tree' } },
     });
@@ -158,6 +167,36 @@ describe('publishToBranch', () => {
     assert.equal(result.status, 'unchanged');
     assert.ok(!calls.some((c) => c.path.endsWith('/git/commits') && c.method === 'POST'));
     assert.ok(!calls.some((c) => c.method === 'PATCH'));
+  });
+
+  it('never replaces a branch it did not create', async () => {
+    const cases: { name: string; routes: ReturnType<typeof ownedBranch>; branch?: string; expect: RegExp }[] = [
+      { name: 'history', routes: ownedBranch('c1', 't1', { parents: [{ sha: 'c0' }] }), expect: /already exists and was not created by Profilescape \(its latest commit has history\)/ },
+      { name: 'no snippet', routes: ownedBranch('c1', 't1', { files: ['index.html', 'README.md'] }), expect: /was not created by Profilescape \(it has no README-snippet\.md\)/ },
+      { name: 'default branch', routes: ownedBranch('c1', 't1', { defaultBranch: 'profilescape-output' }), expect: /it is the default branch of mira-dev\/mira-dev/ },
+    ];
+    for (const c of cases) {
+      const { calls, fetchImpl } = mockGitHub(c.routes);
+      await assert.rejects(publishToBranch({ ...base, files: FILES, fetchImpl }), (e: unknown) => {
+        assert.ok(e instanceof PublishError, c.name);
+        assert.match(e.message, c.expect, c.name);
+        assert.match(e.message, /dedicated branch/, c.name);
+        return true;
+      });
+      assert.ok(!calls.some((x) => x.method !== 'GET'), `${c.name}: nothing is written`);
+    }
+  });
+
+  it('honours a custom marker file', async () => {
+    const { fetchImpl } = mockGitHub({
+      ...ownedBranch('c1', 't1', { files: ['marker.txt'] }),
+      [`POST ${REPO}/git/blobs`]: blobRoute,
+      [`POST ${REPO}/git/trees`]: { status: 201, body: { sha: 't2' } },
+      [`POST ${REPO}/git/commits`]: { status: 201, body: { sha: 'c2' } },
+      [`PATCH ${REPO}/git/refs/heads/profilescape-output`]: { status: 200, body: {} },
+    });
+    const result = await publishToBranch({ ...base, files: FILES, fetchImpl, markerFile: 'marker.txt' });
+    assert.equal(result.status, 'updated');
   });
 
   it('turns a 403 into a permissions hint', async () => {
@@ -183,8 +222,12 @@ describe('publishToBranch', () => {
   });
 
   it('takes over a branch created concurrently (422 already exists)', async () => {
+    let reads = 0;
+    const owned = ownedBranch('raced', 'raced-tree');
     const { calls, fetchImpl } = mockGitHub({
-      [`GET ${REPO}/git/ref/heads/profilescape-output`]: { status: 404 },
+      ...owned,
+      [`GET ${REPO}/git/ref/heads/profilescape-output`]: () =>
+        ++reads === 1 ? { status: 404 } : { status: 200, body: { object: { sha: 'raced', type: 'commit' } } },
       [`POST ${REPO}/git/blobs`]: blobRoute,
       [`POST ${REPO}/git/trees`]: { status: 201, body: { sha: 't' } },
       [`POST ${REPO}/git/commits`]: { status: 201, body: { sha: 'c' } },
@@ -194,6 +237,21 @@ describe('publishToBranch', () => {
     const result = await publishToBranch({ ...base, files: FILES, fetchImpl });
     assert.equal(result.status, 'updated');
     assert.ok(calls.some((c) => c.method === 'PATCH'));
+  });
+
+  it('does not take over a concurrently created branch that is not an earlier publish', async () => {
+    let reads = 0;
+    const { calls, fetchImpl } = mockGitHub({
+      ...ownedBranch('foreign', 'foreign-tree', { parents: [{ sha: 'p' }] }),
+      [`GET ${REPO}/git/ref/heads/profilescape-output`]: () =>
+        ++reads === 1 ? { status: 404 } : { status: 200, body: { object: { sha: 'foreign', type: 'commit' } } },
+      [`POST ${REPO}/git/blobs`]: blobRoute,
+      [`POST ${REPO}/git/trees`]: { status: 201, body: { sha: 't' } },
+      [`POST ${REPO}/git/commits`]: { status: 201, body: { sha: 'c' } },
+      [`POST ${REPO}/git/refs`]: { status: 422, body: { message: 'Reference already exists' } },
+    });
+    await assert.rejects(publishToBranch({ ...base, files: FILES, fetchImpl }), /was not created by Profilescape/);
+    assert.ok(!calls.some((c) => c.method === 'PATCH'));
   });
 
   it('retries transient 5xx failures', async () => {

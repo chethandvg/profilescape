@@ -1,7 +1,7 @@
-import { countsByDate, isoDate, parseDate, streaks } from '../core/calendar.ts';
+import { isoDate, lastYear, streaks, yearTotal } from '../core/calendar.ts';
 import { compact, monthYear, MONTHS, plural } from '../core/format.ts';
-import { readOptions } from '../core/options.ts';
-import { esc, fit, label, mix, n, shell, textWidth } from '../core/svg.ts';
+import { own, readOptions } from '../core/options.ts';
+import { delay as at, esc, fit, fitLabel, label, mix, n, shell, textWidth } from '../core/svg.ts';
 import { contribRamp } from '../core/themes.ts';
 import type { CardDefinition, Palette, ProfileData, RenderContext } from '../core/types.ts';
 
@@ -67,7 +67,7 @@ const LOOKUP: Record<string, MetricKey> = {
 export function parseMetrics(input: string[]): MetricKey[] {
   const out: MetricKey[] = [];
   for (const raw of input) {
-    const key = LOOKUP[normalize(raw)];
+    const key = own(LOOKUP, normalize(raw));
     if (key && !out.includes(key)) out.push(key);
   }
   return out.slice(0, MAX_METRICS);
@@ -109,18 +109,10 @@ export function computeFacts(data: ProfileData, now: Date): StatsFacts {
   const calendar = (Array.isArray(data.calendar) ? data.calendar : [])
     .filter((d) => d && typeof d.date === 'string' && d.date.slice(0, 10) <= today)
     .map((d) => ({ date: d.date.slice(0, 10), count: safe(d.count) }));
-  const counts = countsByDate(calendar);
-  const end = parseDate(today).getTime();
-  const lastDays = (len: number) =>
-    Array.from({ length: len }, (_, i) => {
-      const date = isoDate(new Date(end - (len - 1 - i) * DAY));
-      return { date, count: counts.get(date) ?? 0 };
-    });
-
-  const year = lastDays(365);
-  const rolling = year.slice(1); // 364 days = 52 full weeks ending today
+  // GitHub's "last year" (shared with the 3D and grid cards), so every card states the same figures.
+  const year = lastYear(calendar, now);
+  const rolling = year.slice(-364); // 52 full weeks ending today
   const weeks = Array.from({ length: 52 }, (_, w) => rolling.slice(w * 7, w * 7 + 7).reduce((s, d) => s + d.count, 0));
-  const yearSum = year.reduce((s, d) => s + d.count, 0);
 
   let bestDay: StatsFacts['bestDay'] = { count: 0, date: null };
   for (const d of year) if (d.count > bestDay.count) bestDay = { count: d.count, date: d.date };
@@ -145,7 +137,7 @@ export function computeFacts(data: ProfileData, now: Date): StatsFacts {
 
   const y = data.year;
   return {
-    yearTotal: safe(y?.contributions) || yearSum,
+    yearTotal: yearTotal({ calendar, year: y }, now),
     current,
     longest,
     allTime,
@@ -247,30 +239,9 @@ function icon(name: string, x: number, y: number, size: number, color: string): 
 
 // ── Layout helpers ──────────────────────────────────────────────────────────
 
-/** Width of the uppercase mono header drawn by label() (12px, letter-spacing 1.4). */
-const headerWidth = (s: string) => [...s].length * (12 * 0.6 + 1.4);
-
-function fitHeader(s: string, maxWidth: number): string {
-  if (headerWidth(s) <= maxWidth) return s;
-  let out = s;
-  while (out.length > 1 && headerWidth(`${out}…`) > maxWidth) out = out.slice(0, -1);
-  return `${out.trimEnd()}…`;
-}
-
-const tileLabelWidth = (s: string) => [...s].length * (LABEL_SIZE * 0.6 + LABEL_SPACING);
-
-function fitTileLabel(s: string, maxWidth: number): string {
-  if (tileLabelWidth(s) <= maxWidth) return s;
-  let out = s;
-  while (out.length > 1 && tileLabelWidth(`${out}…`) > maxWidth) out = out.slice(0, -1);
-  return `${out.trimEnd()}…`;
-}
-
-const at = (seconds: number) => `style="animation-delay:${n(seconds, 3)}s"`;
-
 function tileSvg(t: Tile, x: number, y: number, w: number, p: Palette, index: number): string {
   const inner = w - 32;
-  const labelText = fitTileLabel(t.label.toUpperCase(), inner - 21);
+  const labelText = fitLabel(t.label.toUpperCase(), inner - 21, { size: LABEL_SIZE, spacing: LABEL_SPACING });
   const unitW = t.unit ? textWidth(t.unit, 13) + 6 : 0;
   let size = 26;
   const valueW = (s: number) => textWidth(t.value, s, { weight: 700 }) - 0.5 * t.value.length;
@@ -281,7 +252,7 @@ function tileSvg(t: Tile, x: number, y: number, w: number, p: Palette, index: nu
     `<g class="up" ${at(0.12 + index * 0.05)}>` +
     `<rect x="${n(x)}" y="${n(y)}" width="${n(w)}" height="${TILE_H}" rx="12" fill="${p.panelAlt}" stroke="${p.border}"/>` +
     icon(t.icon, x + 16, y + 15, 14, p.accentB) +
-    `<text x="${n(x + 37)}" y="${n(y + 26.5)}" class="mono" font-size="${LABEL_SIZE}" letter-spacing="${LABEL_SPACING}" fill="${mix(p.faint, p.muted, 0.45)}">${esc(labelText)}</text>` +
+    `<text x="${n(x + 37)}" y="${n(y + 26.5)}" class="mono" font-size="${LABEL_SIZE}" letter-spacing="${LABEL_SPACING}" fill="${p.muted}">${esc(labelText)}</text>` +
     `<text x="${n(x + 16)}" y="${n(y + 58)}" class="sans"><tspan font-size="${size}" font-weight="700" letter-spacing="-.5" fill="${p.text}">${esc(t.value)}</tspan>${unitSvg}</text>` +
     '</g>'
   );
@@ -343,7 +314,7 @@ function weeklyChart(f: StatsFacts, box: ChartBox, ctx: RenderContext): { svg: s
   const parts: string[] = [];
 
   if (box.headerY !== null) {
-    parts.push(label(x0, box.headerY, 'Weekly contributions', p, { color: p.faint }));
+    parts.push(label(x0, box.headerY, 'Weekly contributions', p, { color: p.muted }));
   }
 
   // Faint guide lines at half and full peak height.
@@ -381,7 +352,7 @@ function weeklyChart(f: StatsFacts, box: ChartBox, ctx: RenderContext): { svg: s
     parts.push(
       `<line class="fade" ${at(0.9)} x1="${n(x0)}" y1="${n(avgY)}" x2="${n(x0 + cw)}" y2="${n(avgY)}" stroke="${p.muted}" stroke-opacity=".7" stroke-dasharray="3 4"/>`,
       `<g class="fade" ${at(0.9)}><line x1="${n(lx)}" y1="${n(box.axisY - 4)}" x2="${n(lx + 14)}" y2="${n(box.axisY - 4)}" stroke="${p.muted}" stroke-dasharray="3 3"/>` +
-        `<text x="${n(lx + 22)}" y="${n(box.axisY)}" class="mono" font-size="11.5" fill="${p.faint}">${esc(avgText)}</text></g>`,
+        `<text x="${n(lx + 22)}" y="${n(box.axisY)}" class="mono" font-size="11.5" fill="${p.muted}">${esc(avgText)}</text></g>`,
     );
 
     // Peak annotation above the busiest week (clamped inside the chart).
@@ -401,8 +372,8 @@ function weeklyChart(f: StatsFacts, box: ChartBox, ctx: RenderContext): { svg: s
   }
 
   parts.push(
-    `<text x="${n(x0)}" y="${n(box.axisY)}" class="mono" font-size="11.5" fill="${p.faint}">${esc(monthYear(f.weeksStart))}</text>`,
-    `<text x="${n(x0 + cw)}" y="${n(box.axisY)}" text-anchor="end" class="mono" font-size="11.5" fill="${p.faint}">now</text>`,
+    `<text x="${n(x0)}" y="${n(box.axisY)}" class="mono" font-size="11.5" fill="${p.muted}">${esc(monthYear(f.weeksStart))}</text>`,
+    `<text x="${n(x0 + cw)}" y="${n(box.axisY)}" text-anchor="end" class="mono" font-size="11.5" fill="${p.muted}">now</text>`,
   );
   return { svg: parts.join(''), defs };
 }
@@ -431,7 +402,7 @@ function render(ctx: RenderContext) {
     const leftW = 504;
     const dividerX = PAD + leftW + 40;
     const chartX = dividerX + 40;
-    if (showTitle) parts.push(label(PAD, 56, fitHeader(title, leftW), p));
+    if (showTitle) parts.push(label(PAD, 56, fitLabel(title, leftW), p));
     const h = hero(facts.yearTotal, PAD, heroBaseline, leftW, p);
     defs.push(h.defs);
     parts.push(h.svg);
@@ -456,7 +427,7 @@ function render(ctx: RenderContext) {
     const contentH = Math.max(heroBlock + 14, gridH);
     H = PAD * 2 + contentH;
     const blockTop = PAD + (contentH - heroBlock) / 2 - 4;
-    if (showTitle) parts.push(label(PAD, blockTop + 12, fitHeader(title, leftW), p));
+    if (showTitle) parts.push(label(PAD, blockTop + 12, fitLabel(title, leftW), p));
     const h = hero(facts.yearTotal, PAD, blockTop + heroBlock, leftW, p);
     defs.push(h.defs);
     parts.push(h.svg);

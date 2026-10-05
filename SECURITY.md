@@ -41,5 +41,5 @@ The single-purpose action repositories (`profilescape-3d`, `profilescape-stats` 
 
 - **Grant the least permissions.** The job only needs `contents: write`. Declare it at job level and nothing else.
 - **Use a read-only token for private data.** If you include private contributions, create a fine-grained personal access token with **read-only** repository access, store it as an encrypted secret (for example `PROFILESCAPE_TOKEN`) and pass it as `token`. Leave `github_token` on the default workflow token so the personal token can never write.
-- **Keep the output branch separate.** Publishing to a dedicated branch keeps generated commits out of your main history and out of branch protection rules.
+- **Keep the output branch separate.** Publishing to a dedicated branch keeps generated SVG commits out of your main history and out of branch protection rules. If you set `readme`, your README on the default branch is updated whenever the card markup changes (often daily); leave `readme` empty to avoid commits there.
 - **Review what you run.** The bundled `dist/index.mjs` is built in CI from the sources in this repository, and CI fails if the committed bundle differs from a fresh build.

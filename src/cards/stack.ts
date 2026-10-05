@@ -1,11 +1,13 @@
-import { plural } from '../core/format.ts';
+import { displayName, plural } from '../core/format.ts';
 import { readOptions } from '../core/options.ts';
-import { delay, esc, fit, label, n, shell, textWidth } from '../core/svg.ts';
+import { delay, esc, fit, fitLabel, label, labelWidth, n, shell, textWidth } from '../core/svg.ts';
 import type { CardDefinition, Palette, ProfileData, RenderContext } from '../core/types.ts';
 import { drawIcon, type Icon, legible, resolveIcon } from './icons.ts';
 
 const W = 1200;
 const PAD = 40;
+/** Header label baseline, shared by every full-width card. */
+const HEADER_Y = 56;
 const MAX_ICONS = 48;
 
 interface Item {
@@ -20,7 +22,7 @@ function parseItem(entry: string): Item | null {
   const custom = i > 0 ? entry.slice(i + 1).trim() : '';
   if (!key) return null;
   const icon = resolveIcon(key);
-  return { icon, label: custom || icon.title };
+  return { icon, label: custom || displayName(icon.title) };
 }
 
 /** Top languages that have a known icon, de-duplicated by slug. */
@@ -159,7 +161,7 @@ function emptyState(top: number, p: Palette): Layout {
       '<g class="fade">' +
       `<rect x="${PAD + 0.5}" y="${top + 0.5}" width="${W - PAD * 2 - 1}" height="${h - 1}" rx="14" fill="${p.panelAlt}" fill-opacity=".6" stroke="${p.faint}" stroke-opacity=".45" stroke-dasharray="5 5"/>` +
       `<text x="${W / 2}" y="${top + 50}" text-anchor="middle" class="sans" font-size="16" font-weight="600" fill="${p.muted}">No tech stack to show yet</text>` +
-      `<text x="${W / 2}" y="${top + 76}" text-anchor="middle" class="mono" font-size="12.5" fill="${p.faint}">Pick icons with the "icons" option, e.g. typescript, docker, postgres</text>` +
+      `<text x="${W / 2}" y="${top + 76}" text-anchor="middle" class="mono" font-size="12.5" fill="${p.muted}">Pick icons with the "icons" option, e.g. typescript, docker, postgres</text>` +
       '</g>',
     defs: '',
     height: h,
@@ -190,13 +192,15 @@ export const card: CardDefinition = {
     const perRow = Math.round(o.number('perRow', 8, { min: 3, max: 12 }));
     const title = o.string('title', 'Tech stack');
     const hideTitle = o.boolean('hideTitle', false);
-    const top = hideTitle ? PAD : 78;
+    const top = hideTitle ? PAD : 80;
     const layout = !list.length ? emptyState(top, p) : style === 'chips' ? chips(list, top, ctx) : tiles(list, top, perRow, ctx);
     const height = Math.round(top + layout.height + PAD);
+    const countText = list.length ? `${list.length} ${plural(list.length, 'technology', 'technologies')}` : '';
+    const titleRoom = W - PAD * 2 - (countText ? labelWidth(countText) + 32 : 0);
     const header = hideTitle
       ? ''
-      : `<g class="fade">${label(PAD, 50, fit(title, 760, 12, { mono: true }), p)}` +
-        (list.length ? label(W - PAD, 50, `${list.length} ${plural(list.length, 'technology', 'technologies')}`, p, { anchor: 'end', color: p.faint }) : '') +
+      : `<g class="fade">${label(PAD, HEADER_Y, fitLabel(title, titleRoom), p)}` +
+        (countText ? label(W - PAD, HEADER_Y, countText, p, { anchor: 'end', color: p.muted }) : '') +
         '</g>';
     const names = list.map((i) => i.label);
     const alt = names.length ? `${title}: ${names.join(', ')}` : `${title}: nothing to show yet`;

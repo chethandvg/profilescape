@@ -26,9 +26,9 @@ npm run check   # typecheck, test, build
 | `npm run typecheck` | Type-checks everything with TypeScript (`tsc --noEmit`). |
 | `npm test` | Runs every `*.test.ts` with Node's built-in test runner. |
 | `npm run build` | Bundles the Action and CLI into `dist/` with esbuild. |
-| `npm run check` | All three of the above, as CI runs them. |
+| `npm run check` | All three of the above. CI also fails when `dist/`, the generated Action files or the gallery images are out of date. |
 | `npm run preview` | Renders cards to `preview/` as SVG and PNG (see below). |
-| `npm run gallery` | Regenerates the README and Marketplace images in `docs/images/`. |
+| `npm run gallery` | Regenerates the README and Marketplace images in `docs/images/` and the option tables in the docs. Run it after any change to card output; CI runs `node scripts/gallery.ts --check`. |
 | `npm run site` | Builds the website and playground into `site/dist/`. |
 | `npm run gen:icons` | Regenerates `src/cards/icons.generated.ts` from `simple-icons`. |
 | `npm run gen:actions` | Regenerates `action.yml` and `mirrors/` from `actions/manifest.json`. |
@@ -65,9 +65,9 @@ Files land in `preview/<card>/<theme>/`. PNGs show the final frame (CSS animatio
 ## Adding a theme
 
 1. Add a `Theme` object to `PRESETS` in [`src/core/theme-presets.ts`](src/core/theme-presets.ts) with a lowercase `id`, a display `label`, and complete `dark` and `light` palettes. The `Palette` type in [`src/core/types.ts`](src/core/types.ts) documents every token.
-2. Check contrast: body text (`text`) needs at least 4.5:1 against `panel`, and `muted` should stay readable. `contrast()` in `src/core/svg.ts` computes the ratio.
+2. Check contrast against `panel`: `text` at least 7:1, `muted` 4.5:1, `faint` 2.4:1 and both accents 3:1 (the full list is in [docs/themes.md](docs/themes.md#propose-a-theme)). `npm test` checks every preset, and `contrast()` in `src/core/svg.ts` computes the ratio.
 3. Preview every card with it: `node scripts/preview.ts --card all --theme <id>`, and also with `--data empty`.
-4. Run `npm run gallery` if you want to refresh the docs images, then `npm run check`.
+4. Run `npm run gallery` to add the theme to the docs images (CI fails when they are out of date), then `npm run check`.
 5. Open a pull request with dark and light screenshots. If the palette is based on someone else's work, link it and make sure its licence allows reuse.
 
 Not into code? Propose a palette with the [new theme form](https://github.com/chethandvg/profilescape/issues/new?template=theme_proposal.yml) instead.

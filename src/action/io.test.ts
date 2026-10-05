@@ -3,6 +3,8 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, describe, it } from 'node:test';
+import { fileURLToPath } from 'node:url';
+import { ConfigError } from './config.ts';
 import {
   actionsLogger,
   actionsOutputs,
@@ -13,7 +15,10 @@ import {
   formatKeyValue,
   getInput,
   loadConfigText,
+  neutralizeCommands,
+  parseActionDefaults,
   readInputs,
+  runningActionDefaults,
   writeFiles,
 } from './io.ts';
 
@@ -108,6 +113,15 @@ describe('workflow commands', () => {
     actionsLogger((l) => debugLines.push(l), { RUNNER_DEBUG: '1' }).debug('shown');
     assert.deepEqual(debugLines, ['::debug::shown']);
   });
+
+  it('never lets plain log text act as a workflow command', () => {
+    const lines: string[] = [];
+    actionsLogger((l) => lines.push(l), {}).info('exclude_repos  old-repo\n::warning title=X::injected\n  ::error::also\nfine :: here');
+    const text = lines.join('\n');
+    for (const line of text.split('\n')) assert.ok(!/^\s*::/.test(line), JSON.stringify(line));
+    assert.equal(text.replace(/​/g, ''), 'exclude_repos  old-repo\n::warning title=X::injected\n  ::error::also\nfine :: here');
+    assert.equal(neutralizeCommands('a::b'), 'a::b');
+  });
 });
 
 describe('files', () => {
@@ -129,7 +143,23 @@ describe('files', () => {
     mkdirSync(join(tmp, '.github'), { recursive: true });
     writeFileSync(join(tmp, '.github', 'profilescape.json'), '{"cards":["stats"]}');
     assert.deepEqual(loadConfigText('.github/profilescape.json', tmp), { text: '{"cards":["stats"]}', source: '.github/profilescape.json' });
-    assert.throws(() => loadConfigText('missing.json', tmp), /not found.*actions\/checkout/s);
+    assert.throws(() => loadConfigText('missing.json', tmp), (e: unknown) => e instanceof ConfigError && /not found.*actions\/checkout/s.test(e.message));
+    assert.throws(
+      () => loadConfigText('missing.json', tmp, 'cli'),
+      (e: unknown) => e instanceof ConfigError && /relative to the current directory/.test(e.message) && !/checkout/.test(e.message),
+    );
+  });
+
+  it("reads the running action's input defaults (umbrella and mirrors)", () => {
+    const root = fileURLToPath(new URL('../../', import.meta.url));
+    assert.equal(parseActionDefaults(readFileSync(join(root, 'action.yml'), 'utf8')).cards, 'stats,3d,languages,repos');
+    const hero = runningActionDefaults({ GITHUB_ACTION_PATH: join(root, 'mirrors', 'profilescape-hero') });
+    assert.ok(hero?.cards && hero.cards !== 'stats,3d,languages,repos', 'the hero mirror has its own cards default');
+    assert.equal(hero?.theme, 'aurora');
+    assert.equal(hero?.github_token, '${{ github.token }}');
+    assert.equal(runningActionDefaults({}), undefined);
+    assert.equal(runningActionDefaults({ GITHUB_ACTION_PATH: join(tmp, 'nowhere') }), undefined);
+    assert.deepEqual(parseActionDefaults("name: x\ninputs:\n  cards:\n    description: >-\n      default: nope\n    default: 'a,b'\nruns:\n  cards:\n    default: \"z\"\n"), { cards: 'a,b' });
   });
 
   it('formats sizes', () => {

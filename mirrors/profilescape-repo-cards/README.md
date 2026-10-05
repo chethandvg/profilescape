@@ -66,7 +66,7 @@ Showcase the projects that matter with repository cards that stay current on the
 
 ### Include private contributions
 
-The default workflow token only sees public activity. To count private work, create a [personal access token](https://github.com/settings/personal-access-tokens/new) with read-only access to your repositories, save it as a repository secret named `PROFILESCAPE_TOKEN` and pass it as `token`:
+The default workflow token only sees public activity. To count private work, create a [fine-grained personal access token](https://github.com/settings/personal-access-tokens/new) for your account with **All repositories** and the read-only **Contents** and **Metadata** repository permissions, save it as a repository secret named `PROFILESCAPE_TOKEN` and pass it as `token`:
 
 ```yaml
       - uses: chethandvg/profilescape-repo-cards@v1
@@ -94,12 +94,12 @@ This action renders `repos` by default; every input below works exactly as in [P
 | `history` | `full` | Contribution history to fetch: `full` (every year since the account was created) or `year` (the last 12 months, faster). |
 | `hide_languages` | _empty_ | Comma-separated languages to leave out of language statistics, for example `HTML,Jupyter Notebook`. |
 | `exclude_repos` | _empty_ | Comma-separated repositories (`name` or `owner/name`) to ignore in every card. |
-| `include_private` | `true` | Include private repositories the token can read in aggregated statistics. Set to `false` for public data only. |
+| `include_private` | `true` | Include private repositories the token can read in repository and language statistics. Contribution counts always follow what the token can see, so use the default workflow token for public-only counts. |
 | `repos` | _empty_ | Comma-separated repositories for repo cards (`name` or `owner/name`). Empty uses your pinned repositories, then your most starred. |
 | `config` | _empty_ | Optional JSON config with per-card options and colour overrides: a path relative to the repository root (requires `actions/checkout`) or inline JSON. |
 | `output_dir` | `profilescape` | Workspace directory the SVG files and a ready-to-paste `README-snippet.md` are written to, for use by later steps. |
 | `publish` | `branch` | Where to publish the SVG files: `branch` commits them to the output branch (only when something changed), `none` only writes them to `output_dir`. |
-| `branch` | `profilescape-output` | Branch that holds the published SVG files. Created on first run and kept to a single commit, so it never bloats your history. |
+| `branch` | `profilescape-output` | Dedicated branch that holds the published SVG files. It is replaced wholesale on every publish (a single commit, so it never bloats your history); Profilescape refuses to overwrite your default branch or any branch it did not create. |
 | `commit_message` | `chore: update profilescape cards` | Commit message for the output branch and README updates. |
 | `readme` | _empty_ | README to keep up to date, for example `README.md`. The cards are written between `<!-- profilescape:start -->` and `<!-- profilescape:end -->` markers. Empty leaves READMEs untouched. |
 | `github_token` | `${{ github.token }}` | Token used to push the output branch and README update to this repository. Needs `contents: write`. |
@@ -114,7 +114,7 @@ This action renders `repos` by default; every input below works exactly as in [P
 
 ## Part of Profilescape
 
-Profilescape Repo Cards is one of a family of focused actions built from the same engine, so every card shares one design language and one set of themes. Mix and match them, or use [Profilescape - GitHub Profile Cards](https://github.com/chethandvg/profilescape) to render any combination of cards in a single step.
+Profilescape Repo Cards is one of a family of focused actions built from the same engine, so every card shares one design language and one set of themes. To show several cards, use [Profilescape - GitHub Profile Cards](https://github.com/chethandvg/profilescape) to render any combination in a single step. Combining actions also works if each step gets its own `branch` and only one of them sets `readme`.
 
 | Action | Renders | Use it |
 | --- | --- | --- |

@@ -1,11 +1,20 @@
 import type { CardOptions } from './types.ts';
 
+/**
+ * `table[key]` only when `key` is the table's own entry. Lookup tables are
+ * plain objects, so without this check user input such as "constructor" or
+ * "__proto__" would resolve to members inherited from Object.prototype.
+ */
+export function own<T>(table: Readonly<Record<string, T>>, key: string): T | undefined {
+  return Object.hasOwn(table, key) ? table[key] : undefined;
+}
+
 /** Typed, forgiving accessors for per-card options coming from user JSON. */
 export function readOptions(options: CardOptions | undefined) {
   const src = options ?? {};
-  const get = (key: string): unknown => src[key];
+  const get = (key: string): unknown => (Object.hasOwn(src, key) ? src[key] : undefined);
   return {
-    has: (key: string) => key in src && src[key] !== undefined && src[key] !== null,
+    has: (key: string) => get(key) !== undefined && get(key) !== null,
     raw: get,
     string(key: string, fallback: string): string {
       const v = get(key);

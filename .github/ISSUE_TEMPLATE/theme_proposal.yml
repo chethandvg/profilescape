@@ -31,7 +31,7 @@ body:
     id: dark
     attributes:
       label: Dark palette
-      description: Hex colours for each token. Leave a line empty if you are unsure; we will help fill it in.
+      description: Hex colours for every token of the `Palette` type. Leave a line empty if you are unsure; we will help fill it in.
       render: yaml
       value: |
         bg:       "#"   # page background behind full-bleed art
@@ -46,6 +46,18 @@ body:
         success:  "#"
         chipBg:   "#"
         empty:    "#"   # empty contribution cell
+        # Optional: keep the suggested values or leave a line empty and we will pick one.
+        grid:        "#"    # decorative grid lines, usually your text colour
+        gridOpacity: 0.05   # 0 to 1, usually 0.04 to 0.05
+        glowOpacity: 0.5    # soft glows, 0 to 1, usually 0.45 to 0.55 in dark mode
+        syntax:             # the hero card's code editor
+          keyword:     "#"
+          type:        "#"
+          string:      "#"
+          property:    "#"
+          number:      "#"
+          punctuation: "#"
+          comment:     "#"
     validations:
       required: true
 
@@ -67,6 +79,18 @@ body:
         success:  "#"
         chipBg:   "#"
         empty:    "#"
+        # Optional
+        grid:        "#"
+        gridOpacity: 0.05
+        glowOpacity: 0.22   # usually 0.2 to 0.28 in light mode
+        syntax:
+          keyword:     "#"
+          type:        "#"
+          string:      "#"
+          property:    "#"
+          number:      "#"
+          punctuation: "#"
+          comment:     "#"
     validations:
       required: true
 
@@ -81,7 +105,7 @@ body:
     attributes:
       label: Before submitting
       options:
-        - label: Body text has at least 4.5:1 contrast against the panel colour in both modes.
+        - label: In both modes, `text` has at least 7:1 and `muted` at least 4.5:1 contrast against `panel` (or I would like help getting there).
           required: true
         - label: The palette is my own work or its licence allows reuse in an MIT project.
           required: true

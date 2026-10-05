@@ -1,4 +1,4 @@
-import type { ContributionDay } from './types.ts';
+import type { ContributionDay, ProfileData } from './types.ts';
 
 export interface CalendarCell {
   /** 0-based week column, Sunday-aligned like GitHub's calendar. */
@@ -31,6 +31,73 @@ export function yearWindow(calendar: ContributionDay[], now: Date, weeks = 53): 
     cells.push({ week: Math.floor(i / 7), day: i % 7, date, count: counts.get(date) ?? 0 });
   }
   return cells;
+}
+
+/**
+ * First day of GitHub's "last year": the same date one year before today
+ * (UTC), so the window runs from there through today inclusive (366 days, 367
+ * across a 29 February). A 29 February today starts from 28 February.
+ */
+export function yearStart(now: Date): string {
+  const today = parseDate(isoDate(now));
+  const y = today.getUTCFullYear() - 1;
+  const m = today.getUTCMonth();
+  const start = new Date(Date.UTC(y, m, today.getUTCDate()));
+  return isoDate(start.getUTCMonth() === m ? start : new Date(Date.UTC(y, m + 1, 0)));
+}
+
+const cleanCount = (c: unknown): number => (typeof c === 'number' && Number.isFinite(c) && c > 0 ? c : 0);
+
+/** Every day of GitHub's "last year" (yearStart() through today), zero-filled, with invalid counts read as 0. */
+export function lastYear(calendar: ContributionDay[], now: Date): ContributionDay[] {
+  const counts = countsByDate(Array.isArray(calendar) ? calendar.filter((d) => d && typeof d.date === 'string') : []);
+  const end = parseDate(isoDate(now)).getTime();
+  const days: ContributionDay[] = [];
+  for (let t = parseDate(yearStart(now)).getTime(); t <= end; t += DAY) {
+    const date = isoDate(new Date(t));
+    days.push({ date, count: cleanCount(counts.get(date)) });
+  }
+  return days;
+}
+
+/**
+ * Contributions in the last year, the one figure every card states: GitHub's
+ * own total when the profile carries one, otherwise the calendar summed over
+ * lastYear(). Both cover the same window, so the stats, 3D and grid cards
+ * always agree with each other and with the profile page.
+ */
+export function yearTotal(data: Pick<ProfileData, 'calendar' | 'year'>, now: Date): number {
+  return cleanCount(data.year?.contributions) || totalOf(lastYear(data.calendar, now));
+}
+
+/** A month label on a Sunday-aligned week grid: `week` is the column it starts at, `month` is 0-based. */
+export interface MonthStart {
+  week: number;
+  month: number;
+}
+
+/**
+ * Month labels for a week grid, shared by the grid and 3D cards so both frame
+ * the year the same way. A month is labelled at the first column whose Sunday
+ * falls in it. The partial month in the first column is labelled only when the
+ * next label is at least `minGap` columns away, and a final month with fewer
+ * than `minTail` columns is left unlabelled.
+ */
+export function monthStarts(cells: CalendarCell[], weeks: number, minGap: number, minTail = 2): MonthStart[] {
+  const starts: MonthStart[] = [];
+  let prev = -1;
+  for (let w = 0; w < weeks; w++) {
+    const first = cells.find((c) => c.week === w);
+    if (!first) continue;
+    const month = Number(first.date.slice(5, 7)) - 1;
+    if (month !== prev) starts.push({ week: w, month });
+    prev = month;
+  }
+  return starts.filter((s, i) => {
+    const next = starts[i + 1];
+    if (i === 0 && next && next.week - s.week < minGap) return false;
+    return !(i > 0 && !next && weeks - s.week < minTail);
+  });
 }
 
 /**

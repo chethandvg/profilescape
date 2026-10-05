@@ -1,4 +1,4 @@
-import { readOptions } from '../core/options.ts';
+import { own, readOptions } from '../core/options.ts';
 import { esc, fit, n, shell, textWidth } from '../core/svg.ts';
 import type { CardDefinition, CardImage, Palette, RenderContext } from '../core/types.ts';
 import { drawIcon, type Icon, legible, resolveIcon, slugify } from './icons.ts';
@@ -112,7 +112,7 @@ export interface SocialLink {
 
 const platformKey = (key: string): string => {
   const slug = slugify(key);
-  return KEY_ALIASES[slug] ?? slug;
+  return own(KEY_ALIASES, slug) ?? slug;
 };
 
 /** Only http(s) and mailto links are ever emitted; bare domains get https://. */
@@ -124,7 +124,8 @@ function safeUrl(value: string): string | null {
   return /^[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,}(:\d+)?([/?#].*)?$/i.test(v) ? `https://${v}` : null;
 }
 
-const EMAIL = /^[^@\s/]+@[^@\s/]+\.[^@\s/]+$/;
+/** A plain address: no spaces, slashes, quotes or angle brackets anywhere. */
+const EMAIL = /^[^@\s/"'<>`]+@[^@\s/"'<>`]+\.[^@\s/"'<>`]+$/;
 
 function hostOf(url: string): string {
   const m = /^https?:\/\/([^/?#:]+)/i.exec(url);
@@ -169,10 +170,10 @@ function buildLink(rawKey: string, rawValue: string): SocialLink | null {
     const url = safeUrl(value);
     if (!url) return null;
     const host = hostOf(url);
-    const p = PLATFORMS[key] as Platform;
+    const p = own(PLATFORMS, key) as Platform;
     return { key, label: key === 'website' ? host || p.label : p.label, url, icon: resolveIcon(p.icon), handle: host || undefined };
   }
-  const platform = PLATFORMS[key];
+  const platform = own(PLATFORMS, key);
   if (!platform) {
     // Unknown key: treat as a custom link labelled with the key.
     return customLink(rawKey, value);
@@ -199,8 +200,8 @@ function customLink(label: string, value: string, iconName?: string): SocialLink
   const url = safeUrl(EMAIL.test(bare) ? `mailto:${bare}` : value);
   if (!url) return null;
   const detected = url.startsWith('mailto:') ? 'email' : detect(url);
-  const icon = iconName ? resolveIcon(iconName) : detected ? resolveIcon(PLATFORMS[detected]?.icon ?? detected) : resolveIcon('link');
-  const text = label.trim() || (detected ? (PLATFORMS[detected]?.label ?? hostOf(url)) : hostOf(url)) || 'Link';
+  const icon = iconName ? resolveIcon(iconName) : detected ? resolveIcon(own(PLATFORMS, detected)?.icon ?? detected) : resolveIcon('link');
+  const text = label.trim() || (detected ? (own(PLATFORMS, detected)?.label ?? hostOf(url)) : hostOf(url)) || 'Link';
   return { key: slugify(text) || 'link', label: text, url, icon };
 }
 

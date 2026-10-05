@@ -9,7 +9,7 @@ import { DEMO_NOW, demoProfile } from './core/fixtures.ts';
 import { compact } from './core/format.ts';
 import { fetchProfile, GitHubError } from './core/github.ts';
 import { DEFAULT_THEME, getTheme, themeList } from './core/themes.ts';
-import { CARD_IDS, type ProfileData } from './core/types.ts';
+import { CARD_IDS, type CardId, type OptionDoc, type ProfileData } from './core/types.ts';
 import { readmeMarkup, renderCards } from './render.ts';
 
 /**
@@ -153,6 +153,16 @@ function listThemes(): void {
   out(dim('Use --theme <id>, or tweak any colour with "colors", "darkColors" and "lightColors" in a --config file.'));
 }
 
+/** Defaults that describe behaviour rather than a literal value (kept in step with scripts/gallery.ts). */
+const DESCRIPTIVE_DEFAULTS = new Set(['hero.name', 'hero.role', 'hero.status', 'hero.statusColor', 'hero.codeLanguage', 'hero.codeFile']);
+
+/** " = 4" for literal defaults, " (default: profile name or login)" for descriptive ones. */
+function formatDefault(card: CardId, o: OptionDoc): string {
+  if (o.default === undefined) return '';
+  if (typeof o.default === 'string' && (o.type !== 'string' || DESCRIPTIVE_DEFAULTS.has(`${card}.${o.key}`))) return ` (default: ${o.default})`;
+  return ` = ${JSON.stringify(o.default)}`;
+}
+
 function listCards(): void {
   out(bold('Cards'));
   const width = Math.max(...CARD_IDS.map((id) => id.length));
@@ -162,8 +172,7 @@ function listCards(): void {
     out(`  ${cyan(id.padEnd(width))}  ${bold(card.title)}`);
     if (card.description && card.description !== 'TODO') out(`${' '.repeat(pad)}${dim(wrapText(card.description, pad))}`);
     for (const o of card.options) {
-      const def = o.default === undefined ? '' : ` = ${JSON.stringify(o.default)}`;
-      out(`${' '.repeat(pad)}${o.key} ${dim(`<${o.type}>${def}`)}`);
+      out(`${' '.repeat(pad)}${o.key} ${dim(`<${o.type}>${formatDefault(id, o)}`)}`);
       out(`${' '.repeat(pad + 2)}${dim(wrapText(o.description, pad + 2))}`);
     }
     out();
@@ -174,7 +183,9 @@ function listCards(): void {
 function friendly(e: unknown): string {
   if (e instanceof GitHubError) {
     if (e.status === 401) return `${e.message}\nTip: GH_TOKEN=$(gh auth token) profilescape --user <login>`;
+    if (e.type === 'ORGANIZATION') return e.message;
     if (e.status === 404) return `${e.message}\nCheck the --user value.`;
+    if (e.status === 403 || e.status === 429) return `${e.message}\nIf this is a rate limit, wait a few minutes and try again.`;
     return e.message;
   }
   if (e instanceof ConfigError || e instanceof UsageError) return e.message;
@@ -221,7 +232,7 @@ async function main(argv: string[]): Promise<number> {
     output_dir: v.out,
     publish: 'none',
   };
-  const loaded = v.config ? loadConfigText(v.config, process.cwd()) : null;
+  const loaded = v.config ? loadConfigText(v.config, process.cwd(), 'cli') : null;
   const json = loaded ? parseConfigJson(loaded.text, loaded.source) : undefined;
   const { config, settings, warnings } = resolveConfig(inputs, json, {
     requireUsername: !demo,
@@ -243,6 +254,12 @@ async function main(argv: string[]): Promise<number> {
       );
     }
     now = new Date();
+    if (!config.includePrivate) {
+      err(
+        `${yellow('warning')} Private repositories are left out of repository and language statistics, but contribution counts ` +
+          '(calendar, totals and streaks) still include the private contributions your token can see.',
+      );
+    }
     out(dim(`Fetching @${config.username} from GitHub${settings.history === 'full' ? ' (full history)' : ''}...`));
     data = await fetchProfile({
       token,

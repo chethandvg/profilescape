@@ -7,7 +7,7 @@ import { DEMO_NOW, demoProfile, emptyProfile } from '../core/fixtures.ts';
 import { GitHubError, type FetchOptions } from '../core/github.ts';
 import type { ProfileData } from '../core/types.ts';
 import { ACTION_INPUT_DEFAULTS } from './config.ts';
-import type { Logger } from './io.ts';
+import { actionsLogger, type Logger } from './io.ts';
 import { branchReadme, repositoryIsPrivate, run, snippetDocument } from './main.ts';
 import { START_MARKER } from './readme.ts';
 
@@ -183,6 +183,15 @@ describe('action run()', () => {
         expect: /Check the "username" input/,
       },
       { inputs: {}, env: { GITHUB_REPOSITORY: '' }, expect: /publish: none/ },
+      { inputs: { github_token: '' }, expect: /No github_token.*only ever used to read/s },
+      { inputs: { publish: 'none', readme: 'README.md', github_token: '' }, expect: /No github_token/ },
+      {
+        inputs: { publish: 'none' },
+        fetchProfile: async () => {
+          throw new GitHubError('"acme" is an organization. Profilescape renders personal profiles.', 404, 'ORGANIZATION');
+        },
+        expect: /is an organization.*set it to your personal login/s,
+      },
     ];
     for (const c of cases) {
       const t = setup(c.inputs);
@@ -190,7 +199,60 @@ describe('action run()', () => {
       assert.equal(code, 1, JSON.stringify(c.inputs));
       const error = t.lines.find((l) => l.startsWith('ERROR'));
       assert.match(error ?? '', c.expect);
+      assert.doesNotMatch(error ?? '', /Unexpected error|Please report/, 'expected mistakes are not reported as bugs');
     }
+  });
+
+  it('works with publish: none and no github_token (nothing is written)', async () => {
+    const t = setup({ publish: 'none', github_token: '', cards: 'stats' });
+    const code = await run({ env: t.env, log: t.log, fetchProfile: t.fetchProfile, now: DEMO_NOW });
+    assert.equal(code, 0, t.lines.join('\n'));
+  });
+
+  it('warns that a PAT still counts private contributions when include_private is false', async () => {
+    const pat = setup({ publish: 'none', cards: 'stats', include_private: 'false', token: 'github_pat_abc' });
+    assert.equal(await run({ env: pat.env, log: pat.log, fetchProfile: pat.fetchProfile, now: DEMO_NOW }), 0);
+    assert.ok(pat.lines.some((l) => /^WARNING include_private is false.*still include the private contributions/s.test(l)), pat.lines.join('\n'));
+    const workflow = setup({ publish: 'none', cards: 'stats', include_private: 'false' });
+    assert.equal(await run({ env: workflow.env, log: workflow.log, fetchProfile: workflow.fetchProfile, now: DEMO_NOW }), 0);
+    assert.ok(!workflow.lines.some((l) => /include_private is false/.test(l)), 'the workflow token sees public contributions only');
+  });
+
+  it('lets a config file choose the cards in a single-purpose mirror', async () => {
+    const mirror = join(root, `mirror${counter++}`);
+    mkdirSync(mirror, { recursive: true });
+    writeFileSync(join(mirror, 'action.yml'), 'name: x\ninputs:\n  cards:\n    description: d\n    required: false\n    default: "hero,stack,socials"\n');
+    const t = setup({ publish: 'none', cards: 'hero,stack,socials', config: '{ "cards": ["stats"] }' });
+    const code = await run({ env: { ...t.env, GITHUB_ACTION_PATH: mirror }, log: t.log, fetchProfile: t.fetchProfile, now: DEMO_NOW });
+    assert.equal(code, 0, t.lines.join('\n'));
+    assert.deepEqual(JSON.parse(t.outputs().files as string), ['profilescape/stats-dark.svg', 'profilescape/stats-light.svg', 'profilescape/README-snippet.md']);
+    assert.ok(t.lines.some((l) => /^cards\s+stats\s+\(config\)$/.test(l)), t.lines.join('\n'));
+  });
+
+  it('refuses to overwrite an existing branch Profilescape did not create', async () => {
+    const t = setup({ cards: 'stats', branch: 'main' });
+    const calls: string[] = [];
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+      const path = String(input).replace('https://api.github.com/repos/mira-dev/mira-dev', '');
+      calls.push(`${init?.method ?? 'GET'} ${path}`);
+      const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status });
+      if (path === '/git/ref/heads/main') return json(200, { object: { sha: 'a1', type: 'commit' } });
+      if (path === '/git/commits/a1') return json(200, { sha: 'a1', tree: { sha: 't1' }, parents: [{ sha: 'a0' }] });
+      if (path === '') return json(200, { default_branch: 'main' });
+      return json(500, { message: `unexpected ${path}` });
+    }) as typeof fetch;
+    const code = await run({ env: t.env, log: t.log, fetchProfile: t.fetchProfile, fetchImpl, now: DEMO_NOW, retryDelayMs: 0 });
+    assert.equal(code, 1);
+    assert.match(t.lines.find((l) => l.startsWith('ERROR')) ?? '', /Refusing to publish to "main": it is the default branch/);
+    assert.ok(calls.every((c) => c.startsWith('GET ')), calls.join('\n'));
+  });
+
+  it('neutralises workflow commands smuggled into config values', async () => {
+    const t = setup({ publish: 'none', cards: 'stats', config: '{ "excludeRepos": ["old\\n::warning title=X::injected"] }' });
+    const out: string[] = [];
+    const code = await run({ env: t.env, log: actionsLogger((l) => out.push(l), t.env), outputs: { set() {}, summary() {} }, fetchProfile: t.fetchProfile, now: DEMO_NOW });
+    assert.equal(code, 0, out.join('\n'));
+    for (const line of out.join('\n').split('\n')) assert.doesNotMatch(line, /^\s*::warning title=X/);
   });
 
   it('reports a failing publish with the permissions fix', async () => {

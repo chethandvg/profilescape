@@ -55,6 +55,11 @@ jobs:
       - name: Check generated Action files
         run: node scripts/gen-actions.ts --check
 
+      # README, docs and Marketplace images are real card output, so a card
+      # change must ship with refreshed images (the social preview PNG is skipped).
+      - name: Check gallery images and doc tables
+        run: node scripts/gallery.ts --check
+
       - name: Smoke-render every card in every theme
         run: |
           for data in demo empty; do

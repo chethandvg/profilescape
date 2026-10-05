@@ -1,7 +1,7 @@
 import { levelScale, streaks, yearWindow } from '../core/calendar.ts';
-import { compact, plural } from '../core/format.ts';
-import { readOptions } from '../core/options.ts';
-import { delay, esc, fit, label, linearGradient, n, shell, textWidth, wrap } from '../core/svg.ts';
+import { compact, displayName, plural } from '../core/format.ts';
+import { own, readOptions } from '../core/options.ts';
+import { delay, ensureContrast, esc, fit, label, linearGradient, n, safeColor, shell, textWidth, type TextOpts, wrapPx } from '../core/svg.ts';
 import { contribRamp } from '../core/themes.ts';
 import type { CardDefinition, Palette, ProfileData, RenderContext, SyntaxPalette } from '../core/types.ts';
 import { drawIcon, legible, resolveIcon, slugify } from './icons.ts';
@@ -39,7 +39,7 @@ const LANG_ALIASES: Record<string, CodeLanguage> = {
 };
 
 export function codeLanguageOf(name: string): CodeLanguage | null {
-  return LANG_ALIASES[slugify(name)] ?? null;
+  return own(LANG_ALIASES, slugify(name)) ?? null;
 }
 
 /** First of the user's top languages that has a snippet template; JSON otherwise. */
@@ -256,33 +256,148 @@ export interface Facts {
   login: string;
   base?: string;
   stack: string[];
-  focus?: string;
+  /** A phrase from the bio, or topic names (rendered as a list of whole items). */
+  focus?: string | string[];
   since: number;
 }
 
 const BUILD_VERB =
   /^(i\s*(am|'m)\s+)?(building|making|creating|crafting|shipping|writing|developing|designing|exploring|working\s+on|i\s+build|i\s+make|i\s+create|i\s+craft|i\s+ship|i\s+write|i\s+develop|i\s+design)\s+/i;
 
-/** "Building delightful developer tools." → "Delightful developer tools" (prefers the sentence that says what you build). */
-function focusFrom(bio: string | null): string | undefined {
-  const all = sentences(bio);
-  const sentence = all.find((s) => BUILD_VERB.test(s)) ?? all[0];
-  if (!sentence) return undefined;
-  const text = sentence.replace(BUILD_VERB, '').trim() || sentence;
-  return text.charAt(0).toUpperCase() + text.slice(1);
+/**
+ * A bio split into clauses: lines, then " | ", " — ", " – " and " - ", then
+ * sentences. A sentence ends at . ! ? followed by whitespace, so ".NET" or
+ * "v2.1" never split. Clauses keep their own punctuation.
+ */
+export function bioClauses(bio: string | null | undefined): string[] {
+  const out: string[] = [];
+  for (const line of (bio ?? '').split(/\r?\n/)) {
+    for (const segment of line.split(/\s*\|\s*|\s+[—–-]\s+/)) {
+      for (const sentence of segment.replace(/\s+/g, ' ').trim().split(/(?<=[.!?])\s+/)) {
+        const clause = sentence.trim();
+        if (/[\p{L}\p{N}]/u.test(clause)) out.push(clause);
+      }
+    }
+  }
+  return out;
 }
 
-function sentences(bio: string | null): string[] {
-  const clean = (bio ?? '').replace(/\s+/g, ' ').trim();
-  // A sentence ends at . ! ? followed by whitespace, so ".NET" or "v2.1" never split.
-  return clean
-    .split(/(?<=[.!?])\s+/)
-    .map((s) => s.replace(/[.!?]+$/, '').trim())
-    .filter(Boolean);
+const stripEnd = (s: string) => s.replace(/[\s.!?,;:·]+$/, '').trim();
+/** Comparison key: lower case letters and digits only. */
+const keyOf = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+
+/**
+ * The role line from a bio clause: the whole clause when it fits, otherwise
+ * the longest run of whole "·" (or "•", " / ") items that does. Never cuts
+ * mid-word; returns "" when nothing fits.
+ */
+export function roleFrom(clause: string, fits: (s: string) => boolean): string {
+  const text = stripEnd(clause);
+  if (!text) return '';
+  if (fits(text)) return text;
+  const cuts = [...text.matchAll(/\s+[·•/]\s+/g)].map((m) => m.index).reverse();
+  for (const at of cuts) {
+    const head = stripEnd(text.slice(0, at));
+    if (head && fits(head)) return head;
+  }
+  return '';
+}
+
+/** True when a bio clause only states a place: "📍 Tokyo", or "Germany" for the location "Berlin, Germany". */
+function isLocation(clause: string, location: string): boolean {
+  if (/^\s*(?:📍|🌍|🌎|🌏)/u.test(clause)) return true;
+  const key = keyOf(clause.replace(/^\s*(?:based\s+in|living\s+in|located\s+in|from)\s+/i, ''));
+  if (!key || !location.trim()) return false;
+  const parts = location.split(/[,/·|]/).map(keyOf).filter(Boolean);
+  return key === keyOf(location) || parts.includes(key);
+}
+
+/**
+ * True when one clause starts with the other: the role itself, or the role cut
+ * down to its first list items. A one-word role ("Developer") only matches exactly.
+ */
+const restates = (a: string, b: string) => {
+  const [x, y] = [keyOf(a), keyOf(b)];
+  if (!x || !y) return false;
+  if (!x.includes(' ') || !y.includes(' ')) return x === y;
+  return `${x} `.startsWith(`${y} `) || `${y} `.startsWith(`${x} `);
+};
+
+const ROLE_SIZE = 25;
+const ROLE_WEIGHT = 600;
+const DEFAULT_ROLE = 'Developer';
+
+export interface Copy {
+  role: string;
+  /** Bio clauses not used for the role, in order. */
+  rest: string[];
+}
+
+/**
+ * Role and remaining bio clauses for a text column `colW` wide. An explicit
+ * role option wins; otherwise the first clause that is not a place becomes
+ * the role when it (or its leading list items) fits on the line.
+ */
+function deriveCopy(data: Pick<ProfileData, 'bio' | 'location'>, colW: number, roleOption?: string): Copy {
+  const clauses = bioClauses(data.bio);
+  if (roleOption) return { role: roleOption, rest: clauses.filter((c) => !restates(c, roleOption)) };
+  const fits = (s: string) => textWidth(s, ROLE_SIZE, { weight: ROLE_WEIGHT }) <= colW;
+  const at = clauses.findIndex((c) => !isLocation(c, data.location ?? ''));
+  const role = at >= 0 ? roleFrom(clauses[at] ?? '', fits) : '';
+  return role ? { role, rest: clauses.filter((_, i) => i !== at) } : { role: DEFAULT_ROLE, rest: clauses };
+}
+
+/** Join clauses: sentences flow on, bare fragments ("Open source | Coffee") are separated by " · ". */
+function joinClauses(parts: string[]): string {
+  let out = '';
+  for (const part of parts) out = !out ? part : `${out}${/[.!?]$/.test(out) ? ' ' : ' · '}${part}`;
+  return out;
+}
+
+/** Topics that never describe a focus area. */
+const NOISE_TOPICS = new Set(['hacktoberfest', 'github', 'awesome', 'awesome-list']);
+
+/**
+ * The most common topics across the public, active repositories the user owns
+ * (ties keep the order of the most starred repos). Language topics are left
+ * out because the snippet already lists the stack.
+ */
+export function topTopics(data: ProfileData, limit = 3): string[] {
+  const profileRepo = `${data.login}/${data.login}`.toLowerCase();
+  const counts = new Map<string, number>();
+  for (const repo of data.repos ?? []) {
+    if (repo.isPrivate || repo.isFork || repo.isArchived || repo.nameWithOwner.toLowerCase() === profileRepo) continue;
+    for (const topic of new Set((repo.topics ?? []).map((t) => t.trim().toLowerCase()))) {
+      if (!topic || NOISE_TOPICS.has(topic) || codeLanguageOf(topic) || resolveIcon(topic).category === 'language') continue;
+      counts.set(topic, (counts.get(topic) ?? 0) + 1);
+    }
+  }
+  // Map iteration keeps first-seen order, and Array.prototype.sort is stable.
+  return [...counts]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, limit)
+    .map(([t]) => t);
+}
+
+/**
+ * The snippet's focus line. It never repeats the role or the location: it
+ * comes from what remains of the bio (preferring the sentence that says what
+ * you build), else from the most common repository topics, else it is omitted.
+ */
+export function focusOf(data: ProfileData, copy: Copy): string | string[] | undefined {
+  const location = data.location?.trim() ?? '';
+  const left = copy.rest.filter((c) => !restates(c, copy.role) && !isLocation(c, location));
+  const sentence = left.find((s) => BUILD_VERB.test(s)) ?? left[0];
+  if (sentence) {
+    const text = stripEnd(sentence.replace(BUILD_VERB, '')) || stripEnd(sentence);
+    if (text && !restates(text, copy.role)) return text.charAt(0).toUpperCase() + text.slice(1);
+  }
+  const topics = topTopics(data);
+  return topics.length ? topics : undefined;
 }
 
 /** Truncate at a word boundary when that keeps most of the text, else mid-word. */
-function fitWords(s: string, maxW: number, size: number, opts: { mono?: boolean; weight?: number } = {}): string {
+function fitWords(s: string, maxW: number, size: number, opts: TextOpts = {}): string {
   const cut = fit(s, maxW, size, opts);
   if (cut === s) return s;
   const kept = cut.slice(0, -1);
@@ -290,18 +405,24 @@ function fitWords(s: string, maxW: number, size: number, opts: { mono?: boolean;
   return space >= kept.length * 0.55 ? `${kept.slice(0, space).replace(/[\s·,;:/-]+$/, '')}…` : cut;
 }
 
-function firstSentence(bio: string | null): string {
-  return sentences(bio)[0] ?? '';
+/** Top languages under their short display names, without duplicates. */
+function languageNames(data: ProfileData, limit: number): string[] {
+  return [...new Set(data.languages.map((l) => displayName(l.name)).filter(Boolean))].slice(0, limit);
 }
 
-export function factsFrom(data: ProfileData, name: string, now: Date): Facts {
+/**
+ * Facts for the auto snippet. `copy` is the role and leftover bio shown next
+ * to it (by default derived from the bio exactly as the banner does), so the
+ * focus line never repeats the role.
+ */
+export function factsFrom(data: ProfileData, name: string, now: Date, copy?: Copy): Facts {
   const year = Number(data.createdAt.slice(0, 4));
   return {
     name,
     login: data.login,
     base: data.location?.trim() || undefined,
-    stack: data.languages.slice(0, 3).map((l) => l.name),
-    focus: focusFrom(data.bio),
+    stack: languageNames(data, 3),
+    focus: focusOf(data, copy ?? deriveCopy(data, CODE_COL_W)),
     since: Number.isFinite(year) && year > 1990 ? year : now.getUTCFullYear(),
   };
 }
@@ -467,7 +588,7 @@ export function autoCode(f: Facts, lang: CodeLanguage, maxChars: number): string
   const fields: [string, Value][] = [['name', { kind: 'str', v: f.name }]];
   if (f.base) fields.push(['base', { kind: 'str', v: f.base }]);
   if (f.stack.length) fields.push(['stack', { kind: 'list', v: f.stack }]);
-  if (f.focus) fields.push(['focus', { kind: 'str', v: f.focus }]);
+  if (f.focus?.length) fields.push(['focus', typeof f.focus === 'string' ? { kind: 'str', v: f.focus } : { kind: 'list', v: f.focus }]);
   if (fields.length < 3 && f.login) fields.push(['github', { kind: 'str', v: `@${f.login}` }]);
   fields.push(['since', { kind: 'num', v: f.since }]);
   const maxFields = 9 - t.open.length - t.close.length;
@@ -517,6 +638,8 @@ export function customCode(code: string, maxChars: number): string[] {
 interface Content {
   name: string;
   role: string;
+  /** Role plus the bio clauses it did not use; feeds the snippet's focus line. */
+  copy: Copy;
   tagline: string[];
   chips: string[];
   status: string;
@@ -526,9 +649,8 @@ function content(ctx: RenderContext, colW: number): Content {
   const d = ctx.data;
   const o = readOptions(ctx.options);
   const name = o.string('name', d.name?.trim() || d.login || 'Hello, world');
-  const sentence = firstSentence(d.bio);
-  const roleFromBio = sentence && sentence.length <= 56 ? sentence : '';
-  const role = o.string('role', roleFromBio || 'Developer');
+  const copy = deriveCopy(d, colW, o.optionalString('role')?.trim());
+  const role = copy.role;
 
   const statusRaw = o.string('status', '');
   const location = d.location?.trim() ?? '';
@@ -539,24 +661,20 @@ function content(ctx: RenderContext, colW: number): Content {
   let tagline: string[];
   const rawTag = o.raw('tagline');
   if (Array.isArray(rawTag)) tagline = rawTag.map((s) => String(s).trim()).filter(Boolean).slice(0, 2);
-  else if (typeof rawTag === 'string' && rawTag.trim()) tagline = wrapPx(rawTag.trim(), colW, 17, 2);
+  else if (typeof rawTag === 'string' && rawTag.trim()) tagline = wrapPx(rawTag.trim(), colW, 17, {}, 2);
   else {
-    const bio = (d.bio ?? '').replace(/\s+/g, ' ').trim();
-    const rest = roleFromBio && !o.has('role') ? bio.slice(bio.indexOf(sentence) + sentence.length).replace(/^[.!?\s]+/, '') : bio;
-    const parts = [rest];
-    if (d.company?.trim()) parts.push(`Currently at ${d.company.trim()}.`);
-    if (location && !status.includes(location)) parts.push(`Based in ${location}.`);
-    const text = parts.filter(Boolean).join(' ').trim();
-    tagline = wrapPx(text || `Building in public on GitHub since ${factsFrom(d, name, ctx.now).since}.`, colW, 17, 2);
+    // The location is said once: in the status line, else in the tagline.
+    const locationShown = !!location && status.toLowerCase().includes(location.toLowerCase());
+    const parts = copy.rest.filter((c) => !(locationShown && isLocation(c, location)));
+    const company = d.company?.trim() ?? '';
+    const bioKey = keyOf(d.bio ?? '');
+    if (company && !` ${bioKey} `.includes(` ${keyOf(company)} `)) parts.push(`Currently at ${company}.`);
+    if (location && !locationShown && !parts.some((c) => isLocation(c, location))) parts.push(`Based in ${location}.`);
+    const text = joinClauses(parts);
+    tagline = wrapPx(text || `Building in public on GitHub since ${factsFrom(d, name, ctx.now, copy).since}.`, colW, 17, {}, 2);
   }
-  const chips = o.has('chips') ? o.list('chips', []) : d.languages.slice(0, 6).map((l) => l.name);
-  return { name, role, tagline, chips: chips.slice(0, 12), status };
-}
-
-/** Word wrap by estimated pixel width; the final line is truncated with an ellipsis. */
-function wrapPx(text: string, maxW: number, size: number, maxLines: number): string[] {
-  const avg = textWidth('abcdefghijklmnopqrstuvwxyz', size) / 26;
-  return wrap(text, Math.max(8, Math.floor(maxW / avg)), maxLines).map((l) => fit(l, maxW, size));
+  const chips = o.has('chips') ? o.list('chips', []) : languageNames(d, 6);
+  return { name, role, copy, tagline, chips: chips.slice(0, 12), status };
 }
 
 /** Largest name size (76 → 48) that fits, then truncate. */
@@ -568,6 +686,14 @@ function nameFit(name: string, maxW: number): { text: string; size: number } {
 
 // ── Pieces ───────────────────────────────────────────────────────────────────
 
+/** Small dots need a little more contrast than large shapes to read. */
+const DOT_CONTRAST = 2.2;
+
+/** A brand or language colour for a small dot on `bg`, sanitised and kept visible. */
+function dotColor(color: string | undefined, bg: string, p: Palette): string {
+  return ensureContrast(safeColor(color, p.accentB), bg, DOT_CONTRAST, p.text);
+}
+
 function chipRow(chips: string[], x0: number, y: number, maxX: number, ctx: RenderContext): string {
   const p = ctx.palette;
   const out: string[] = [];
@@ -575,12 +701,17 @@ function chipRow(chips: string[], x0: number, y: number, maxX: number, ctx: Rend
   chips.forEach((chip, i) => {
     const text = fit(chip, 220, 13, { mono: true });
     const icon = resolveIcon(chip);
-    const lang = ctx.data.languages.find((l) => l.name.toLowerCase() === chip.toLowerCase());
+    const key = chip.trim().toLowerCase();
+    const lang = ctx.data.languages.find((l) => l.name.toLowerCase() === key || displayName(l.name).toLowerCase() === key);
     const w = Math.ceil(12 + 14 + 8 + textWidth(text, 13, { mono: true }) + 14);
     if (x + w > maxX) return;
+    // Logos, and the monogram tiles of brands without one (C#, Java, PowerShell),
+    // match the stack card; anything unknown gets a dot in its language colour.
     const glyph = icon.path
       ? drawIcon(icon, x + 12, y + 8, 14, { color: legible(icon.hex, p.chipBg, p.text), inks: [p.panel, p.text] })
-      : `<circle cx="${n(x + 19, 2)}" cy="${y + 15}" r="4.5" fill="${legible(icon.hex || lang?.color || p.accentB, p.chipBg, p.text)}"/>`;
+      : icon.monogram && icon.known
+        ? drawIcon(icon, x + 11, y + 7, 16, { color: legible(icon.hex, p.chipBg, p.text), inks: [p.panel, p.text] })
+        : `<circle cx="${n(x + 19, 2)}" cy="${y + 15}" r="4.5" fill="${dotColor(icon.hex || lang?.color, p.chipBg, p)}"/>`;
     out.push(
       `<g class="up" ${delay(0.55 + i * 0.07)}>` +
         `<rect x="${n(x, 2)}" y="${y}" width="${w}" height="30" rx="15" fill="${p.chipBg}" stroke="${p.border}"/>${glyph}` +
@@ -647,6 +778,8 @@ function textColumn(c: Content, colW: number, ctx: RenderContext, statusColor: s
 }
 
 const PANEL = { x: 700, y: 52, w: 452, h: 300 };
+/** Text column width when the code panel is shown. */
+const CODE_COL_W = PANEL.x - 40 - X0;
 const CODE_SIZE = 14.5;
 const CHAR_W = CODE_SIZE * 0.6;
 const CODE_X = PANEL.x + 50;
@@ -664,43 +797,27 @@ function codePanel(lines: string[], lang: CodeLanguage, file: string, ctx: Rende
       const by = n(firstBase + i * lineH);
       const num = `<text x="${x + 34}" y="${by}" text-anchor="end" class="mono" font-size="12" fill="${p.faint}" fill-opacity=".7">${i + 1}</text>`;
       if (!line.trim()) return num;
-      // Each run of non-space characters is pinned to its column, so indentation
-      // and alignment hold in whatever monospace font the viewer has, whitespace
-      // is never collapsed, and punctuation still hugs the token before it.
-      let col = 0;
-      let pin = true;
-      const spans: string[] = [];
-      for (const t of tokenize(line, lang)) {
-        // Strings and comments flow as one run (inner spaces kept as no-break spaces).
-        const whole = t.kind === 'string' || t.kind === 'comment' || t.kind === 'property';
-        const segs = whole ? [t.text.replace(/ /g, ' ')] : (t.text.match(/\s+|\S+/g) ?? []);
-        for (const seg of segs) {
-          const len = [...seg].length;
-          if (!seg.trim()) pin = true;
-          else {
-            const at = pin ? ` x="${n(CODE_X + col * CHAR_W, 2)}"` : '';
-            spans.push(`<tspan${at}${t.kind === 'plain' ? '' : ` fill="${color(t.kind)}"`}>${esc(seg)}</tspan>`);
-            pin = false;
-          }
-          col += len;
-        }
-      }
+      // Each line starts at the code column and keeps its spaces as written
+      // (xml:space="preserve"), so indentation and the gaps between tokens follow
+      // whatever monospace font the viewer has instead of an assumed glyph width.
+      const spans = tokenize(line, lang).map((t) => (t.kind === 'plain' ? esc(t.text) : `<tspan fill="${color(t.kind)}">${esc(t.text)}</tspan>`));
+      // The cursor is a block glyph ending the last line, so it always sits right after the text.
+      if (i === lines.length - 1) spans.push(`<tspan class="h-cur" dx="2" fill="${p.accentB}">\u2588</tspan>`);
       return (
         num +
-        `<text class="mono h-code h-type" ${delay(0.55 + i * 0.3)} x="${CODE_X}" y="${by}" font-size="${CODE_SIZE}" fill="${p.text}">${spans.join('')}</text>`
+        `<text class="mono h-code h-type" ${delay(0.55 + i * 0.3)} x="${CODE_X}" y="${by}" font-size="${CODE_SIZE}" fill="${p.text}" xml:space="preserve">${spans.join('')}</text>`
       );
     })
     .join('');
-  const lastIdx = Math.max(0, lines.length - 1);
-  const lastLen = [...(lines[lastIdx] ?? '')].length;
-  const cursor = `<rect class="h-cur" x="${n(CODE_X + lastLen * CHAR_W + 3)}" y="${n(firstBase + lastIdx * lineH - 13)}" width="9" height="17" rx="1.5" fill="${p.accentB}"/>`;
   const fileIcon = resolveIcon(FILE_ICONS[lang]);
   const fileName = fit(file, w - 160, 12.5, { mono: true });
   const fw = textWidth(fileName, 12.5, { mono: true });
   const fx = x + w / 2 - (fw + 20) / 2;
   const glyph = fileIcon.path
     ? drawIcon(fileIcon, fx, y + 15, 13, { color: legible(fileIcon.hex, p.panelAlt, p.text), inks: [p.panel, p.text] })
-    : `<circle cx="${n(fx + 6.5, 2)}" cy="${y + 21.5}" r="4" fill="${legible(fileIcon.hex || p.accentB, p.panelAlt, p.text)}"/>`;
+    : fileIcon.monogram && fileIcon.known
+      ? drawIcon(fileIcon, fx - 1, y + 14, 15, { color: legible(fileIcon.hex, p.panelAlt, p.text), inks: [p.panel, p.text] })
+      : `<circle cx="${n(fx + 6.5, 2)}" cy="${y + 21.5}" r="4" fill="${dotColor(fileIcon.hex, p.panelAlt, p)}"/>`;
   return (
     `<g class="up" ${delay(0.3)}>` +
     `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="16" fill="${p.panel}" fill-opacity=".86" stroke="${p.border}"/>` +
@@ -710,7 +827,6 @@ function codePanel(lines: string[], lang: CodeLanguage, file: string, ctx: Rende
     `<text x="${n(fx + 20, 2)}" y="${y + 26}" class="mono" font-size="12.5" fill="${p.muted}">${esc(fileName)}</text>` +
     `<line x1="${x}" y1="${y + 44}" x2="${x + w}" y2="${y + 44}" stroke="${p.border}"/>` +
     body +
-    cursor +
     '</g>'
   );
 }
@@ -752,8 +868,8 @@ function activity(ctx: RenderContext): string {
     .join('');
   return (
     `<g class="fade" ${delay(0.35)}>${label(x0, y0 - 21, `Last ${weeks} weeks`, p)}` +
-    `<text x="${n(squaresStart - 7, 2)}" y="${y0 - 21.5}" text-anchor="end" class="mono" font-size="11" fill="${p.faint}">less</text>${legend}` +
-    `<text x="${right}" y="${y0 - 21.5}" text-anchor="end" class="mono" font-size="11" fill="${p.faint}">more</text></g>` +
+    `<text x="${n(squaresStart - 7, 2)}" y="${y0 - 21.5}" text-anchor="end" class="mono" font-size="11" fill="${p.muted}">less</text>${legend}` +
+    `<text x="${right}" y="${y0 - 21.5}" text-anchor="end" class="mono" font-size="11" fill="${p.muted}">more</text></g>` +
     rects +
     `<text class="mono fade" ${delay(0.9)} x="${x0}" y="${y0 + gh + 30}" font-size="13" fill="${p.muted}">${esc(caption)}</text>`
   );
@@ -792,7 +908,7 @@ export const card: CardDefinition = {
     const o = readOptions(ctx.options);
     const codeOpt = o.string('code', 'auto');
     const showCode = !/^(none|false|off|hide)$/i.test(codeOpt.trim());
-    const colW = (showCode ? PANEL.x - 40 : 740) - X0;
+    const colW = showCode ? CODE_COL_W : 740 - X0;
     const c = content(ctx, colW);
     const langOpt = o.optionalString('codeLanguage');
     const lang = (langOpt && langOpt.toLowerCase() !== 'auto' && codeLanguageOf(langOpt)) || detectLanguage(ctx.data);
@@ -800,7 +916,7 @@ export const card: CardDefinition = {
     const lines = !showCode
       ? []
       : codeOpt.trim().toLowerCase() === 'auto'
-        ? autoCode(factsFrom(ctx.data, c.name, ctx.now), lang, MAX_CODE_CHARS)
+        ? autoCode(factsFrom(ctx.data, c.name, ctx.now, c.copy), lang, MAX_CODE_CHARS)
         : customCode(codeOpt, MAX_CODE_CHARS);
     const statusColor = statusColorOf(o.optionalString('statusColor'), p);
 
@@ -819,7 +935,7 @@ export const card: CardDefinition = {
       '.h-ring{opacity:0;transform-box:fill-box;transform-origin:center;animation:h-ring 2.4s ease-out infinite}' +
       '@keyframes h-ring{0%{opacity:.6;transform:scale(1)}100%{opacity:0;transform:scale(2.8)}}' +
       '.h-type{animation:h-type .5s steps(20,end) backwards}@keyframes h-type{from{clip-path:inset(0 100% 0 0)}}' +
-      '.h-code{font-variant-ligatures:none}.h-cur{animation:h-blink 1.1s steps(1) infinite}@keyframes h-blink{50%{opacity:0}}' +
+      '.h-code{font-variant-ligatures:none;white-space:pre}.h-cur{animation:h-blink 1.1s steps(1) infinite}@keyframes h-blink{50%{fill-opacity:0}}' +
       '.h-cell{transform-box:fill-box;transform-origin:center;animation:h-cell .45s ease-out backwards}@keyframes h-cell{from{opacity:0;transform:scale(.3)}}';
     const background =
       '<g clip-path="url(#ps-clip)">' +

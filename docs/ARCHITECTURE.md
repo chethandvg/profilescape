@@ -74,7 +74,7 @@ chethandvg/profilescape  (source, CI, umbrella action, releases)
    └──►  profilescape-template   (contents of template/)
 ```
 
-Single-purpose mirrors exist for discoverability: each has its own Marketplace listing, but they are generated, never edited by hand, and run the identical bundle. Issues and pull requests always come here. `node scripts/gen-actions.ts --check` runs in CI and in the release workflow, and the tests check that the inputs in `action.yml` match what the runtime parses. See [RELEASING.md](RELEASING.md) for the release process.
+Single-purpose mirrors exist for discoverability: each has its own Marketplace listing, but they are generated, never edited by hand, and run the identical bundle. Issues and pull requests always come here. `node scripts/gen-actions.ts --check` and `node scripts/gallery.ts --check` (the README and Marketplace images) run in CI and in the release workflow, and the tests check that the inputs in `action.yml` match what the runtime parses. See [RELEASING.md](RELEASING.md) for the release process.
 
 ## Repository layout
 

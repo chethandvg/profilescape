@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Profilescape: self-hosted GitHub profile cards</title>
+    <meta name="description" content="Beautiful, self-hosted GitHub profile README cards: a 3D contribution landscape, stats, languages, repo cards, hero banner and more. A GitHub Action that runs with your own token: no rate limits, no servers. Free and open source." />
+    <link rel="canonical" href="https://chethandvg.github.io/profilescape/" />
+    <meta name="theme-color" content="#0B0D14" />
+    <meta name="color-scheme" content="dark light" />
+    <meta name="author" content="Chethan D V" />
+    <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Profilescape" />
+    <meta property="og:title" content="Profilescape: self-hosted GitHub profile cards" />
+    <meta property="og:description" content="A 3D contribution landscape, stats, languages, repo cards and more for your GitHub profile README. Runs as a GitHub Action with your own token." />
+    <meta property="og:url" content="https://chethandvg.github.io/profilescape/" />
+    <meta name="twitter:title" content="Profilescape: self-hosted GitHub profile cards" />
+    <meta name="twitter:description" content="A 3D contribution landscape, stats, languages, repo cards and more for your GitHub profile README. Your token, no servers." />
+    <!-- @og-image -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "Profilescape",
+        "description": "Self-hosted GitHub profile README cards rendered by a GitHub Action with your own token.",
+        "applicationCategory": "DeveloperApplication",
+        "operatingSystem": "GitHub Actions",
+        "url": "https://chethandvg.github.io/profilescape/",
+        "sameAs": "https://github.com/chethandvg/profilescape",
+        "license": "https://opensource.org/licenses/MIT",
+        "isAccessibleForFree": true,
+        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+        "author": { "@type": "Person", "name": "Chethan D V", "url": "https://github.com/chethandvg" }
+      }
+    </script>
+
+    <script>
+      // Apply the stored colour scheme before first paint (dark first, then the system preference).
+      (function () {
+        var t = null;
+        try {
+          t = localStorage.getItem('profilescape:theme');
+        } catch (e) {}
+        if (t !== 'dark' && t !== 'light') t = window.matchMedia && matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+        document.documentElement.setAttribute('data-theme', t);
+        document.documentElement.className += ' js';
+      })();
+    </script>
+    <link rel="stylesheet" href="{{CSS}}" />
+    <script type="module" src="{{APP}}"></script>
+  </head>
+  <body>
+    <svg width="0" height="0" class="sprite" aria-hidden="true" focusable="false">
+      <symbol id="i-github" viewBox="0 0 24 24"><path fill="currentColor" d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12" /></symbol>
+      <symbol id="i-sun" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4.2" /><path d="M12 2.5v2M12 19.5v2M4.6 4.6l1.4 1.4M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4 6 18M18 6l1.4-1.4" /></g></symbol>
+      <symbol id="i-moon" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M20 14.5A8.5 8.5 0 1 1 9.5 4a7 7 0 0 0 10.5 10.5Z" /></symbol>
+      <symbol id="i-arrow" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M5 12h14M13 6l6 6-6 6" /></symbol>
+      <symbol id="i-copy" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="8.5" y="8.5" width="12" height="12" rx="2.5" /><path d="M15.5 8.5V6a2.5 2.5 0 0 0-2.5-2.5H6A2.5 2.5 0 0 0 3.5 6v7A2.5 2.5 0 0 0 6 15.5h2.5" /></g></symbol>
+    </svg>
+
+    <a class="skip-link" href="#playground">Skip to the playground</a>
+
+    <header class="site-header">
+      <div class="wrap header-inner">
+        <a class="brand" href="#top" aria-label="Profilescape, back to top">
+          <img src="favicon.svg" width="28" height="28" alt="" />
+          <span>Profilescape</span>
+        </a>
+        <nav class="nav" aria-label="Main">
+          <a href="#playground">Playground</a>
+          <a href="#gallery" class="nav-wide">Gallery</a>
+          <a href="#quick-start" class="nav-wide">Quick start</a>
+        </nav>
+        <div class="header-actions">
+          <a class="icon-link" href="https://github.com/chethandvg/profilescape" aria-label="Profilescape on GitHub" title="GitHub"><svg width="20" height="20" aria-hidden="true"><use href="#i-github" /></svg></a>
+          <button id="theme-toggle" class="icon-link theme-toggle" type="button" aria-label="Switch colour theme">
+            <svg class="i-sun" width="20" height="20" aria-hidden="true"><use href="#i-sun" /></svg>
+            <svg class="i-moon" width="20" height="20" aria-hidden="true"><use href="#i-moon" /></svg>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <main id="main">
+      <section class="hero" id="top" aria-labelledby="hero-title">
+        <div class="wrap hero-grid">
+          <div class="hero-copy">
+            <p class="eyebrow"><span class="dot" aria-hidden="true"></span> Open source · MIT · Actively maintained</p>
+            <h1 id="hero-title">Your GitHub profile, <span class="grad">rendered as a landscape</span></h1>
+            <p class="lede">Profilescape turns your contributions, languages and projects into a matching set of animated SVG cards for your profile README. It runs as a GitHub Action in your own repository with your own token: no rate limits, no servers, private contributions optional.</p>
+            <div class="cta-row">
+              <a class="btn btn-primary" href="#quick-start">Get started <svg width="18" height="18" aria-hidden="true"><use href="#i-arrow" /></svg></a>
+              <a class="btn btn-secondary" href="https://github.com/chethandvg/profilescape"><svg width="18" height="18" aria-hidden="true"><use href="#i-github" /></svg> GitHub</a>
+            </div>
+            <ul class="facts" aria-label="Highlights">
+              <li><strong>{{CARD_COUNT}}</strong> cards</li>
+              <li><strong>{{THEME_COUNT}}</strong> themes</li>
+              <li><strong>Dark + light</strong> variants</li>
+              <li><strong>0</strong> runtime dependencies</li>
+            </ul>
+          </div>
+          <div class="hero-visual">
+            <div class="hero-glow" aria-hidden="true"></div>
+            <figure class="hero-frame glass">
+              <img id="hero-card" class="hero-card" width="1200" height="658" alt="3D contribution landscape of a demo profile" />
+              <noscript><img class="hero-card hero-static" src="assets/hero-3d-dark.svg" width="1200" height="658" alt="3D contribution landscape of a demo profile" /></noscript>
+            </figure>
+            <div class="hero-themes">
+              <span class="hero-themes-label" id="hero-themes-label">Rendered live in your browser. Try a theme:</span>
+              <div id="hero-swatches" class="hero-swatches" role="group" aria-labelledby="hero-themes-label"></div>
+              <a id="hero-open" class="text-link" href="#playground">Customize <svg width="14" height="14" aria-hidden="true"><use href="#i-arrow" /></svg></a>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="playground" aria-labelledby="playground-title">
+        <div class="wrap">
+          <div class="section-head">
+            <p class="kicker">Playground</p>
+            <h2 id="playground-title">Design your cards</h2>
+            <p class="muted">Pick cards, a theme and options. The preview renders instantly in your browser and the workflow below updates as you go. The URL keeps your setup, so you can share it.</p>
+          </div>
+          <noscript><p class="notice">The playground needs JavaScript. The <a href="#quick-start">quick start</a> works without it.</p></noscript>
+
+          <div class="pg">
+            <div class="pg-controls glass" id="pg-controls" aria-label="Playground settings" role="group"></div>
+
+            <div class="pg-main">
+              <div class="pg-preview-wrap glass" role="region" aria-labelledby="pv-title">
+                <div class="pv-head">
+                  <h3 id="pv-title">Live preview</h3>
+                  <div class="pv-actions">
+                    <button id="pg-replay" class="btn btn-ghost btn-sm" type="button">Replay</button>
+                    <button id="pg-share" class="btn btn-ghost btn-sm" type="button"><span class="btn-text">Copy link</span></button>
+                    <button id="pg-reset" class="btn btn-ghost btn-sm" type="button">Reset</button>
+                  </div>
+                </div>
+                <p class="demo-note"><strong>Preview uses demo data</strong> - your real data is rendered by the Action in your repo.</p>
+                <div id="pg-preview" class="pv-body" aria-live="off"></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="pg-output glass" role="region" aria-labelledby="out-title">
+            <div class="out-head">
+              <h3 id="out-title">Your setup</h3>
+              <div class="tabs" id="out-tabs" role="tablist" aria-label="Generated files">
+                <button role="tab" type="button" id="tab-workflow" aria-selected="true" aria-controls="panel-workflow" tabindex="0">Workflow</button>
+                <button role="tab" type="button" id="tab-readme" aria-selected="false" aria-controls="panel-readme" tabindex="-1">README</button>
+                <button role="tab" type="button" id="tab-config" aria-selected="false" aria-controls="panel-config" tabindex="-1">Config file</button>
+              </div>
+            </div>
+            <div class="tab-panel" id="panel-workflow" role="tabpanel" aria-labelledby="tab-workflow">
+              <p class="hint">Save as <code>.github/workflows/profilescape.yml</code> in your profile repository (the one named after your username). Only settings that differ from the defaults are included.</p>
+              <div class="code-block">
+                <div class="code-bar"><span class="file">.github/workflows/profilescape.yml</span><button class="btn btn-ghost btn-sm copy-btn" type="button" data-copy="workflow" data-label="Workflow" aria-label="Copy the workflow"><svg width="15" height="15" aria-hidden="true"><use href="#i-copy" /></svg><span class="btn-text">Copy</span></button></div>
+                <pre tabindex="0" aria-label="Workflow YAML"><code id="out-workflow"></code></pre>
+              </div>
+            </div>
+            <div class="tab-panel" id="panel-readme" role="tabpanel" aria-labelledby="tab-readme" hidden>
+              <p class="hint">Paste these markers into <code>README.md</code> where the cards should appear. The Action rewrites only what is between them, so the rest of your README stays yours.</p>
+              <div class="code-block">
+                <div class="code-bar"><span class="file">README.md</span><button class="btn btn-ghost btn-sm copy-btn" type="button" data-copy="readme" data-label="README markers" aria-label="Copy the README markers"><svg width="15" height="15" aria-hidden="true"><use href="#i-copy" /></svg><span class="btn-text">Copy</span></button></div>
+                <pre tabindex="0" aria-label="README markers"><code id="out-readme"></code></pre>
+              </div>
+            </div>
+            <div class="tab-panel" id="panel-config" role="tabpanel" aria-labelledby="tab-config" hidden>
+              <p class="hint">The same setup as a file: use it with the CLI (<code>--config profilescape.json</code>) or point the Action's <code>config</code> input at it.</p>
+              <div class="code-block">
+                <div class="code-bar"><span class="file">profilescape.json</span><button class="btn btn-ghost btn-sm copy-btn" type="button" data-copy="config" data-label="Config file" aria-label="Copy the config file"><svg width="15" height="15" aria-hidden="true"><use href="#i-copy" /></svg><span class="btn-text">Copy</span></button></div>
+                <pre tabindex="0" aria-label="Config JSON"><code id="out-config"></code></pre>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="gallery" aria-labelledby="gallery-title">
+        <div class="wrap">
+          <div class="section-head">
+            <p class="kicker">Gallery</p>
+            <h2 id="gallery-title">Every card, every theme</h2>
+            <p class="muted">{{CARD_COUNT}} cards in {{THEME_COUNT}} themes, shown in the page's colour mode. Click any of them to open it in the playground.</p>
+          </div>
+          <div class="segmented segmented-wrap" id="gallery-filters" role="radiogroup" aria-label="Filter the gallery by card"></div>
+          <div id="gallery-groups" class="g-groups"></div>
+        </div>
+      </section>
+
+      <section class="section" id="quick-start" aria-labelledby="qs-title">
+        <div class="wrap">
+          <div class="section-head">
+            <p class="kicker">Quick start</p>
+            <h2 id="qs-title">Live on your profile in three steps</h2>
+            <p class="muted">About five minutes, no servers and no secrets required.</p>
+          </div>
+          <ol class="steps">
+            <li class="step glass">
+              <span class="step-num" aria-hidden="true">1</span>
+              <h3>Create your profile repository</h3>
+              <p>GitHub shows the README of the public repository named exactly like your username, for example <code>octocat/octocat</code>. Or start from the template, which already has the workflow and markers.</p>
+              <p><a class="btn btn-secondary btn-sm" href="https://github.com/chethandvg/profilescape-template">Use the template</a></p>
+            </li>
+            <li class="step glass">
+              <span class="step-num" aria-hidden="true">2</span>
+              <h3>Add the workflow</h3>
+              <p>Copy the workflow from the <a href="#playground">playground</a> into <code>.github/workflows/profilescape.yml</code>, or start from this minimal one:</p>
+              <pre class="snippet" tabindex="0" aria-label="Minimal workflow"><code><span class="tk-k">name</span>: Profilescape
+<span class="tk-k">on</span>:
+  <span class="tk-k">schedule</span>:
+    - <span class="tk-k">cron</span>: "23 4 * * *"<span class="tk-c"> # every day</span>
+  <span class="tk-k">workflow_dispatch</span>:
+<span class="tk-k">permissions</span>:
+  <span class="tk-k">contents</span>: write
+<span class="tk-k">jobs</span>:
+  <span class="tk-k">cards</span>:
+    <span class="tk-k">runs-on</span>: ubuntu-latest
+    <span class="tk-k">steps</span>:
+      - <span class="tk-k">uses</span>: chethandvg/profilescape@v1
+        <span class="tk-k">with</span>:
+          <span class="tk-k">readme</span>: README.md</code></pre>
+            </li>
+            <li class="step glass">
+              <span class="step-num" aria-hidden="true">3</span>
+              <h3>Add the markers and run it</h3>
+              <p>Put <code>&lt;!-- profilescape:start --&gt;</code> and <code>&lt;!-- profilescape:end --&gt;</code> in your README, then open <strong>Actions → Profilescape → Run workflow</strong>. Your cards appear in about a minute and refresh every day.</p>
+            </li>
+          </ol>
+          <div class="qs-extra">
+            <div class="glass qs-card">
+              <h3>Private contributions</h3>
+              <p>The default workflow token sees public activity. Add a fine-grained <a href="https://github.com/settings/personal-access-tokens/new">personal access token</a> (All repositories; read-only Contents and Metadata) as the <code>PROFILESCAPE_TOKEN</code> secret to include private repositories and contributions. It is only ever used to read.</p>
+            </div>
+            <div class="glass qs-card">
+              <h3>Prefer the terminal?</h3>
+              <p>The CLI renders the same cards into a <code>profilescape</code> folder. Try it without a token:</p>
+              <pre class="snippet" tabindex="0" aria-label="CLI example"><code>npx github:chethandvg/profilescape --demo --cards all</code></pre>
+            </div>
+          </div>
+          <h3 class="sub-head">Standalone actions</h3>
+          <p class="muted">Want just one card? Each of these runs the same engine with a different default card set.</p>
+          <ul class="actions-list" role="list">
+            <!-- @actions -->
+          </ul>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="wrap footer-inner">
+        <div class="footer-brand">
+          <img src="favicon.svg" width="24" height="24" alt="" />
+          <span><strong>Profilescape</strong> v{{VERSION}}. Free and open source under the <a href="https://github.com/chethandvg/profilescape/blob/main/LICENSE">MIT License</a>.</span>
+        </div>
+        <nav class="footer-links" aria-label="Footer">
+          <a href="https://github.com/chethandvg/profilescape">GitHub</a>
+          <a href="https://github.com/chethandvg/profilescape/issues/new/choose">Report an issue</a>
+          <a href="https://github.com/chethandvg/profilescape/discussions">Discussions</a>
+          <a href="https://github.com/chethandvg/profilescape/blob/main/CONTRIBUTING.md">Contribute</a>
+        </nav>
+        <p class="footer-author">Made by <a href="https://github.com/chethandvg">Chethan D V</a>. Not affiliated with GitHub.</p>
+      </div>
+    </footer>
+
+    <div id="announcer" class="sr-only" aria-live="polite" aria-atomic="true"></div>
+  </body>
+</html>

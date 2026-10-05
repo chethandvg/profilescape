@@ -3,7 +3,19 @@ import { test } from 'node:test';
 import { demoProfile, DEMO_NOW, emptyProfile } from '../core/fixtures.ts';
 import { getTheme } from '../core/themes.ts';
 import type { CardOptions, Mode, ProfileData } from '../core/types.ts';
-import { autoCode, card, CODE_LANGUAGES, customCode, detectLanguage, factsFrom, MAX_CODE_CHARS, tokenize } from './hero.ts';
+import {
+  autoCode,
+  bioClauses,
+  card,
+  CODE_LANGUAGES,
+  customCode,
+  detectLanguage,
+  factsFrom,
+  MAX_CODE_CHARS,
+  roleFrom,
+  tokenize,
+  topTopics,
+} from './hero.ts';
 
 const HOSTILE = `<script>&"'`;
 
@@ -131,8 +143,96 @@ test('auto snippets fit the panel in every language', () => {
   assert.match(ts, /name: "Mira Chen"/);
   assert.match(ts, /base: "Amsterdam, NL"/);
   assert.match(ts, /"TypeScript", "Rust", "Go"/);
-  assert.match(ts, /focus: "Delightful developer tools"/);
+  // The role line already says "Building delightful developer tools", so focus uses the rest of the bio.
+  assert.match(ts, /focus: "Open source at heart"/);
   assert.match(ts, /since: 2021/);
+});
+
+/** Drawn text only (the accessible title and description repeat it). */
+const visible = (svg: string) => svg.replace(/<title[\s\S]*?<\/desc>/, '');
+
+const REAL_BIO = 'Software Engineer · .NET · Azure · Applied AI | Berlin';
+
+test('bio clauses split on bars, dashes, newlines and sentences', () => {
+  assert.deepEqual(bioClauses(REAL_BIO), ['Software Engineer · .NET · Azure · Applied AI', 'Berlin']);
+  assert.deepEqual(bioClauses('Staff engineer - Rust — Wasm\nOpen source. Coffee!'), ['Staff engineer', 'Rust', 'Wasm', 'Open source.', 'Coffee!']);
+  // Hyphens inside words, ".NET" and version numbers never split.
+  assert.deepEqual(bioClauses('Full-stack .NET dev, v2.1 fan'), ['Full-stack .NET dev, v2.1 fan']);
+  assert.deepEqual(bioClauses(null), []);
+  assert.deepEqual(bioClauses(' | · | '), []);
+});
+
+test('role trims whole list items instead of cutting a word', () => {
+  const fits = (max: number) => (s: string) => s.length <= max;
+  assert.equal(roleFrom('A · B · C', fits(20)), 'A · B · C');
+  assert.equal(roleFrom('Engineer · Kubernetes · Observability', fits(24)), 'Engineer · Kubernetes');
+  assert.equal(roleFrom('Designer / Developer / Writer', fits(22)), 'Designer / Developer');
+  assert.equal(roleFrom('Building tools.', fits(20)), 'Building tools');
+  assert.equal(roleFrom('A sentence that is far too long to fit', fits(10)), '');
+});
+
+test('real-world bio: role, tagline, location and focus never repeat each other', () => {
+  const data: ProfileData = {
+    ...demoProfile(),
+    name: 'Chethan',
+    bio: REAL_BIO,
+    location: 'Berlin, Germany',
+    company: null,
+    languages: [
+      { name: 'C#', color: '#178600', value: 90 },
+      { name: 'Jupyter Notebook', color: '#DA5B0B', value: 6 },
+      { name: 'PowerShell', color: '#012456', value: 4 },
+    ],
+  };
+  const svg = render(data);
+  assertValidSvg(svg);
+  assert.match(svg, />Software Engineer · \.NET · Azure · Applied AI</);
+  assert.doesNotMatch(svg, /\||Applied AI …|Applied AI…/);
+  // Berlin is in the status line, so the tagline does not say it again.
+  assert.match(svg, /open to collaboration · Berlin, Germany/);
+  assert.equal(visible(svg).match(/Berlin/g)?.length, 2, 'status line and the snippet base only');
+  // Display names on chips and in the snippet.
+  assert.match(svg, />Jupyter</);
+  assert.doesNotMatch(svg, /Jupyter Notebook/);
+  // Focus comes from the most common topics, not the role.
+  const code = autoCode(factsFrom(data, 'Chethan', DEMO_NOW), 'csharp', MAX_CODE_CHARS).join('\n');
+  assert.doesNotMatch(code, /Software Engineer/);
+  assert.match(code, /Focus = \["react", "design-system"/);
+  assert.match(code, /Stack = \["C#", "Jupyter", "PowerShell"\]/);
+});
+
+test('focus: leftover bio first, then repo topics, else omitted', () => {
+  const base = { ...demoProfile(), location: 'Lisbon' };
+  const facts = (bio: string, extra: Partial<ProfileData> = {}) => factsFrom({ ...base, bio, ...extra }, 'X', DEMO_NOW);
+  assert.equal(facts('Platform engineer | Building internal developer platforms').focus, 'Internal developer platforms');
+  assert.equal(facts('Platform engineer | Lisbon').focus?.[0], 'react', 'location is never the focus');
+  assert.deepEqual(topTopics(base, 2), ['react', 'design-system']);
+  // Private, archived and forked repos never leak their topics; language topics are skipped.
+  const repos = base.repos.map((r, i) => ({ ...r, isPrivate: i === 0, isArchived: i === 1, isFork: i === 2 }));
+  const topics = topTopics({ ...base, repos }, 10);
+  assert.ok(!topics.includes('react') && !topics.includes('cache') && !topics.includes('rest-api'), topics.join());
+  assert.ok(!topics.includes('python') && !topics.includes('dotnet'), topics.join());
+  assert.equal(facts('Platform engineer', { repos: [] }).focus, undefined);
+  const none = autoCode(facts('Platform engineer', { repos: [] }), 'typescript', MAX_CODE_CHARS).join('\n');
+  assert.doesNotMatch(none, /focus/);
+});
+
+test('a place clause never becomes the role', () => {
+  const svg = render({ ...demoProfile(), bio: '📍 Tokyo | ML engineer', location: 'Tokyo, Japan' });
+  assert.match(svg, /font-size="25"[^>]*>ML engineer</);
+  assert.doesNotMatch(visible(svg), /📍/);
+});
+
+test('location is said once: status line, else tagline', () => {
+  const data: ProfileData = { ...demoProfile(), bio: 'Engineer | Lisbon', location: 'Lisbon, Portugal', company: null };
+  const shown = render(data);
+  assert.equal(visible(shown).match(/Lisbon/g)?.length, 2, 'status line and snippet base');
+  const hidden = render(data, { status: 'none' });
+  // The leftover "Lisbon" clause is kept, and "Based in …" is not added on top of it.
+  assert.match(hidden, />Lisbon</);
+  assert.doesNotMatch(hidden, /Based in/);
+  const noBio = render({ ...data, bio: 'Engineer' }, { status: 'none' });
+  assert.match(noBio, /Based in Lisbon, Portugal\./);
 });
 
 test('snippet strings escape quotes for the target language', () => {

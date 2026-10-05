@@ -334,6 +334,21 @@ describe('repos card: safety and determinism', () => {
     assert.ok(img?.svg.includes('*{animation:none!important}'));
   });
 
+  it('keeps dark language colours visible and uses short language names in the footer', () => {
+    const ps = { name: 'PowerShell', color: '#012456' };
+    const r = { ...base(), primaryLanguage: ps, languages: [{ ...ps, value: 10 }] };
+    for (const layout of ['compact', 'detail']) {
+      const dark = render(withRepos({ extraRepos: [r] }), { layout })[0]?.svg ?? '';
+      assert.ok(!dark.includes('#012456'), `${layout}: navy is lifted on the dark panel`);
+      const light = render(withRepos({ extraRepos: [r] }), { layout }, 'light')[0]?.svg ?? '';
+      assert.ok(light.includes('#012456'), `${layout}: navy already reads on the light panel`);
+    }
+    const jupyter = { ...base(), primaryLanguage: { name: 'Jupyter Notebook', color: '#DA5B0B' }, topics: [] };
+    const svg = render(withRepos({ extraRepos: [jupyter] }))[0]?.svg ?? '';
+    const drawn = svg.replace(/<desc>[^<]*<\/desc>/, '');
+    assert.ok(drawn.includes('>Jupyter<') && drawn.includes('>JUPYTER<') && !drawn.includes('Noteb'));
+  });
+
   it('category label skips topics that repeat the language', () => {
     const r = { ...base(), primaryLanguage: { name: 'C#', color: '#178600' }, languages: [], topics: ['csharp', 'dotnet', 'gpu'] };
     assert.equal(categoryLabel(r, 400), 'C# · DOTNET');

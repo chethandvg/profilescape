@@ -1,5 +1,6 @@
+import { CARDS } from '../cards/registry.ts';
 import { DEFAULT_THEME, getTheme, themeIds } from '../core/themes.ts';
-import { CARD_IDS, type CardId, type CardOptions, type Mode, type PaletteOverrides, type ProfilescapeConfig } from '../core/types.ts';
+import { CARD_IDS, type CardId, type CardOptions, type Mode, type OptionDoc, type PaletteOverrides, type ProfilescapeConfig } from '../core/types.ts';
 
 /**
  * Turns raw Action inputs / CLI flags plus an optional config JSON into a
@@ -50,7 +51,7 @@ export type PublishMode = 'branch' | 'none';
 export interface Settings {
   /** Reads profile data (a PAT also sees private contributions and repos). */
   token: string;
-  /** Writes the output branch and README; falls back to `token`. */
+  /** Writes the output branch and README. Never falls back to `token`, which is only used to read. */
   githubToken: string;
   history: History;
   outputDir: string;
@@ -68,8 +69,12 @@ export interface ResolvedConfig {
   settings: Settings;
   warnings: string[];
   /** Where each user-facing setting came from, for friendly logs. */
-  sources: Record<'cards' | 'theme' | 'modes' | 'animate' | 'history' | 'hideLanguages' | 'excludeRepos' | 'includePrivate' | 'repos', Source>;
+  sources: Record<SourceKey, Source>;
+  /** Config keys that were set but lost to an explicitly provided input. */
+  overridden: SourceKey[];
 }
+
+export type SourceKey = 'cards' | 'theme' | 'modes' | 'animate' | 'history' | 'hideLanguages' | 'excludeRepos' | 'includePrivate' | 'repos';
 
 export interface ResolveOptions {
   /** Fallback login (the Action passes GITHUB_REPOSITORY_OWNER). */
@@ -80,6 +85,11 @@ export interface ResolveOptions {
    * which would otherwise make the config JSON unable to override anything.
    */
   ignoreDefaultInputs?: boolean;
+  /**
+   * Defaults of the action.yml that is actually running, where they differ from
+   * the umbrella's (a single-purpose mirror has its own `cards` default).
+   */
+  inputDefaults?: RawInputs;
   /** Throw when no username can be determined (default true). */
   requireUsername?: boolean;
   /** How to name an input in messages; the CLI passes flag names. Default: 'the <name> input'. */
@@ -181,10 +191,13 @@ function parseBool(value: unknown, field: string): boolean {
 
 function toList(value: unknown, field: string): string[] {
   if (Array.isArray(value)) {
-    return value.map((v) => {
-      if (typeof v !== 'string' && typeof v !== 'number') throw new ConfigError(`${field} must be a list of strings.`);
-      return String(v).trim();
-    }).filter(Boolean);
+    // Items are split on line breaks like the inputs, so no value ever spans lines in the log.
+    return value
+      .flatMap((v) => {
+        if (typeof v !== 'string' && typeof v !== 'number') throw new ConfigError(`${field} must be a list of strings.`);
+        return String(v).split(/[\r\n]+/).map((s) => s.trim());
+      })
+      .filter(Boolean);
   }
   if (typeof value === 'string') return splitList(value);
   throw new ConfigError(`${field} must be a list (array or comma-separated string).`);
@@ -479,6 +492,47 @@ export function normalizePalette(value: unknown, field: string, warnings: string
   return out as PaletteOverrides;
 }
 
+const BOOL_WORDS = ['true', 'false', 'yes', 'no', 'y', 'n', 'on', 'off', '1', '0'];
+
+/** Warn about a value the card cannot use (it then falls back to its default). */
+function checkOptionType(doc: OptionDoc, value: unknown, field: string, warnings: string[]): void {
+  if (value === undefined || value === null) return;
+  const bad = (expected: string) => warnings.push(`${field} must be ${expected}, got ${JSON.stringify(value)}; the card uses its default.`);
+  if (doc.type === 'number') {
+    const num = typeof value === 'number' ? value : typeof value === 'string' && value.trim() ? Number(value) : Number.NaN;
+    if (!Number.isFinite(num)) bad('a number');
+  } else if (doc.type === 'boolean') {
+    if (typeof value !== 'boolean' && !(typeof value === 'string' && BOOL_WORDS.includes(value.trim().toLowerCase()))) bad('true or false');
+  } else if (doc.type === 'list') {
+    if (!Array.isArray(value) && typeof value !== 'string') bad('a list');
+  } else if (doc.type === 'object') {
+    if (!isObject(value)) bad('an object');
+  } else if (typeof value !== 'string' && typeof value !== 'number') {
+    bad('a string');
+  }
+}
+
+/**
+ * One card's options. Keys may be camelCase, snake_case or kebab-case in any
+ * letter case ("hide_title", "Layout"); unknown keys and unusable values warn.
+ */
+function normalizeCardOptions(id: CardId, field: string, value: Record<string, unknown>, warnings: string[]): CardOptions {
+  const docs = CARDS[id]?.options ?? [];
+  const keys = docs.map((d) => d.key);
+  const out: CardOptions = {};
+  for (const [rawKey, v] of Object.entries(value)) {
+    const key = camel(rawKey.trim());
+    const doc = docs.find((d) => d.key.toLowerCase() === key.toLowerCase());
+    if (!doc) {
+      warnings.push(`Ignoring unknown option "${field}.${rawKey}"${hint(key, keys)}. Options for ${id}: ${keys.join(', ') || 'none'}.`);
+      continue;
+    }
+    checkOptionType(doc, v, `${field}.${doc.key}`, warnings);
+    out[doc.key] = v;
+  }
+  return out;
+}
+
 function normalizeOptions(value: unknown, warnings: string[]): Partial<Record<CardId, CardOptions>> {
   if (value === undefined || value === null) return {};
   if (!isObject(value)) throw new ConfigError('options must be an object keyed by card id, e.g. { "repos": { "layout": "detail" } }.');
@@ -491,7 +545,7 @@ function normalizeOptions(value: unknown, warnings: string[]): Partial<Record<Ca
       continue;
     }
     if (!isObject(v)) throw new ConfigError(`options.${k} must be an object.`);
-    out[id] = { ...(out[id] ?? {}), ...v };
+    out[id] = { ...(out[id] ?? {}), ...normalizeCardOptions(id, `options.${k}`, v, warnings) };
   }
   return out;
 }
@@ -536,12 +590,13 @@ export function resolveConfig(inputs: RawInputs, json?: unknown, opts: ResolveOp
     if (!v) return undefined;
     if (opts.ignoreDefaultInputs) {
       const norm = (s: string) => s.replace(/\s+/g, '').toLowerCase();
-      if (norm(v) === norm(ACTION_INPUT_DEFAULTS[name])) return undefined;
+      if (norm(v) === norm(opts.inputDefaults?.[name] ?? ACTION_INPUT_DEFAULTS[name])) return undefined;
     }
     return v;
   };
   const has = (key: string) => file[key] !== undefined && file[key] !== null;
   const sources = {} as ResolvedConfig['sources'];
+  const overridden: SourceKey[] = [];
 
   /** Pick input > config > default and record where it came from. */
   function pick<T>(
@@ -554,6 +609,7 @@ export function resolveConfig(inputs: RawInputs, json?: unknown, opts: ResolveOp
     const v = explicit(input);
     if (v !== undefined) {
       sources[key] = 'input';
+      if (has(key)) overridden.push(key);
       return fromInput(v, opts.inputLabel ? opts.inputLabel(input) : `the ${input} input`);
     }
     if (has(key)) {
@@ -640,7 +696,7 @@ export function resolveConfig(inputs: RawInputs, json?: unknown, opts: ResolveOp
     config: { username, cards, theme, colors, darkColors, lightColors, modes, animate, hideLanguages, excludeRepos, includePrivate, repos, options },
     settings: {
       token,
-      githubToken: (inputs.github_token ?? '').trim() || token,
+      githubToken: (inputs.github_token ?? '').trim(),
       history,
       outputDir,
       publish,
@@ -650,5 +706,6 @@ export function resolveConfig(inputs: RawInputs, json?: unknown, opts: ResolveOp
     },
     warnings,
     sources,
+    overridden,
   };
 }

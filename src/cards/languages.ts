@@ -1,6 +1,7 @@
-import { plural } from '../core/format.ts';
+import { displayName, plural } from '../core/format.ts';
 import { readOptions } from '../core/options.ts';
-import { contrast, esc, fit, label, mix, n, shell, textWidth, wrap } from '../core/svg.ts';
+import { delay as at, ensureContrast, esc, fit, fitLabel, label, labelWidth, n, safeColor, shell, textWidth, wrapPx } from '../core/svg.ts';
+import { otherColor } from '../core/themes.ts';
 import type { CardDefinition, CardImage, LanguageStat, Palette, ProfileData, RenderContext } from '../core/types.ts';
 
 /**
@@ -30,8 +31,9 @@ export interface Prepared {
   allHidden: boolean;
 }
 
-const HEX = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
-const safeColor = (c: unknown, fallback: string) => (typeof c === 'string' && HEX.test(c.trim()) ? c.trim() : fallback);
+/** Minimum contrast of a language colour against the card surface. */
+const MIN_CONTRAST = 1.8;
+
 const validStats = (list: unknown): LanguageStat[] =>
   (Array.isArray(list) ? list : []).filter(
     (l): l is LanguageStat =>
@@ -68,7 +70,8 @@ export function prepareLanguages(
     if (hidden.has(key)) continue;
     const cur = merged.get(key);
     if (cur) cur.value += l.value;
-    else merged.set(key, { name, color: safeColor(l.color, p.muted), value: l.value });
+    // Real GitHub colours, nudged only when they would vanish into the panel (PowerShell navy on dark).
+    else merged.set(key, { name, color: ensureContrast(safeColor(l.color, p.muted), p.panel, MIN_CONTRAST, p.text), value: l.value });
   }
   const visible = [...merged.values()].sort((a, b) => b.value - a.value || a.name.localeCompare(b.name));
   const top = Math.max(1, Math.min(10, Math.round(opts.top)));
@@ -79,7 +82,7 @@ export function prepareLanguages(
   if (rest > 0) {
     const existing = items.find((l) => l.name.toLowerCase() === 'other');
     if (existing) existing.value += rest;
-    else items.push({ name: 'Other', color: p.faint, value: rest, other: true });
+    else items.push({ name: 'Other', color: otherColor(p, items.map((l) => l.color)), value: rest, other: true });
   }
   const total = items.reduce((s, l) => s + l.value, 0);
   const pcts = percentLabels(items.map((l) => l.value));
@@ -101,21 +104,11 @@ export function pickSource(data: ProfileData, wanted: Weighting): { weighting: W
 
 // ── Shared drawing helpers ──────────────────────────────────────────────────
 
-const at = (seconds: number) => `style="animation-delay:${n(seconds, 3)}s"`;
-
-/** Width of the uppercase mono header drawn by label() (12px, letter-spacing 1.4). */
-const headerWidth = (s: string) => [...s].length * (12 * 0.6 + 1.4);
-
-function fitHeader(s: string, maxWidth: number): string {
-  if (headerWidth(s) <= maxWidth) return s;
-  let out = s;
-  while (out.length > 1 && headerWidth(`${out}…`) > maxWidth) out = out.slice(0, -1);
-  return `${out.trimEnd()}…`;
-}
-
-/** A hairline for colours that would vanish against the card surface (e.g. JavaScript yellow on white). */
-function edge(color: string, p: Palette): string {
-  return contrast(color, p.panel) < 1.6 ? ` stroke="${mix(color, p.text, 0.4)}" stroke-opacity=".55"` : '';
+/** The official name when it fits, else the short display name ("Jupyter"), truncated only as a last resort. */
+function legendName(name: string, maxWidth: number, size: number): string {
+  const opts = { weight: 600 };
+  if (textWidth(name, size, opts) <= maxWidth) return name;
+  return fit(displayName(name), maxWidth, size, opts);
 }
 
 const STYLE =
@@ -129,16 +122,12 @@ interface Header {
 
 /** Header label on the left, optional info on the right; the title yields space so they never touch. */
 function header(h: Header, x: number, y: number, width: number, p: Palette): string {
-  const infoW = h.info ? textWidth(h.info, 12, { mono: true }) : 0;
+  // The info is a second label (same style as the stack card's count), in muted.
+  const infoW = h.info ? labelWidth(h.info) : 0;
   const room = width - infoW - 32;
-  const showInfo = h.info && room >= Math.min(220, headerWidth(h.title));
-  const title = fitHeader(h.title, showInfo ? room : width);
-  return (
-    label(x, y, title, p) +
-    (showInfo
-      ? `<text x="${n(x + width)}" y="${n(y)}" text-anchor="end" class="mono" font-size="12" fill="${p.faint}">${esc(h.info)}</text>`
-      : '')
-  );
+  const showInfo = h.info && room >= Math.min(220, labelWidth(h.title));
+  const title = fitLabel(h.title, showInfo ? room : width);
+  return label(x, y, title, p) + (showInfo ? label(x + width, y, h.info, p, { anchor: 'end', color: p.muted }) : '');
 }
 
 /** Stacked horizontal bar of all slices with small gaps, clipped to a pill. */
@@ -209,9 +198,9 @@ function barLayout({ prepared, head, p }: LayoutArgs): Drawn {
     const lx = PAD + (i % cols) * colW;
     const ly = first + Math.floor(i / cols) * pitch;
     const pctW = textWidth(s.pct, 13, { mono: true });
-    const name = fit(s.name, colW - 20 - 8 - pctW - 20, 15, { weight: 600 });
+    const name = legendName(s.name, colW - 20 - 8 - pctW - 20, 15);
     parts.push(
-      `<g class="fade" ${at(0.35 + i * 0.05)}><circle cx="${n(lx + 6)}" cy="${n(ly - 5)}" r="6" fill="${s.color}"${edge(s.color, p)}/>` +
+      `<g class="fade" ${at(0.35 + i * 0.05)}><circle cx="${n(lx + 6)}" cy="${n(ly - 5)}" r="6" fill="${s.color}"/>` +
         `<text x="${n(lx + 20)}" y="${n(ly)}"><tspan class="sans" font-size="15" font-weight="600" fill="${s.other ? p.muted : p.text}">${esc(name)}</tspan>` +
         `<tspan dx="8" class="mono" font-size="13" fill="${p.muted}">${esc(s.pct)}</tspan></text></g>`,
     );
@@ -281,8 +270,10 @@ function donutLayout({ prepared, head, p }: LayoutArgs): Drawn {
   const rows = Math.ceil(slices.length / cols);
   const pitch = Math.min(38, (R * 2 + 8) / Math.max(1, rows));
   const firstY = cy - ((rows - 1) * pitch) / 2 + 5;
-  const nameW = cols === 1 ? 200 : 150;
   const pctW = 64;
+  // Name column sized to the longest name (full names stay readable), leaving the bars at least 96px.
+  const longest = Math.max(0, ...slices.map((s) => textWidth(s.name, 15, { weight: 600 })));
+  const nameW = Math.min(colW - pctW - 16 - 96, Math.max(cols === 1 ? 200 : 150, Math.ceil(longest) + 42));
   const trackW = colW - nameW - pctW - 16;
   slices.forEach((s, i) => {
     const col = Math.floor(i / rows);
@@ -292,11 +283,11 @@ function donutLayout({ prepared, head, p }: LayoutArgs): Drawn {
     const tx = x + nameW;
     const w = Math.max(3, s.share * trackW);
     parts.push(
-      `<g class="fade" ${at(0.3 + i * 0.05)}><circle cx="${n(x + 5)}" cy="${n(y - 5)}" r="5" fill="${s.color}"${edge(s.color, p)}/>` +
-        `<text x="${n(x + 18)}" y="${n(y)}" class="sans" font-size="15" font-weight="600" fill="${s.other ? p.muted : p.text}">${esc(fit(s.name, nameW - 30, 15, { weight: 600 }))}</text>` +
+      `<g class="fade" ${at(0.3 + i * 0.05)}><circle cx="${n(x + 5)}" cy="${n(y - 5)}" r="5" fill="${s.color}"/>` +
+        `<text x="${n(x + 18)}" y="${n(y)}" class="sans" font-size="15" font-weight="600" fill="${s.other ? p.muted : p.text}">${esc(legendName(s.name, nameW - 30, 15))}</text>` +
         `<rect x="${n(tx)}" y="${n(y - 9)}" width="${n(trackW)}" height="8" rx="4" fill="${p.empty}"/>` +
         `<text x="${n(x + colW)}" y="${n(y)}" text-anchor="end" class="mono" font-size="13" fill="${p.muted}">${esc(s.pct)}</text></g>` +
-        `<rect class="lg-seg" ${at(0.35 + i * 0.06)} x="${n(tx)}" y="${n(y - 9)}" width="${n(w)}" height="8" rx="4" fill="${s.color}"${edge(s.color, p)}/>`,
+        `<rect class="lg-seg" ${at(0.35 + i * 0.06)} x="${n(tx)}" y="${n(y - 9)}" width="${n(w)}" height="8" rx="4" fill="${s.color}"/>`,
     );
   });
   return { width: W, height: H, body: parts.join(''), defs: '', style };
@@ -306,7 +297,7 @@ function compactLayout({ prepared, head, p }: LayoutArgs): Drawn {
   const W = 400;
   const PAD = 24;
   const parts: string[] = [];
-  if (head) parts.push(label(PAD, 40, fitHeader(head.title, W - PAD * 2), p));
+  if (head) parts.push(label(PAD, 40, fitLabel(head.title, W - PAD * 2), p));
   const barY = head ? 56 : PAD;
   const { slices } = prepared;
   const bar = stackedBar(slices, PAD, barY, W - PAD * 2, 10, p, 'lg-bar');
@@ -314,7 +305,8 @@ function compactLayout({ prepared, head, p }: LayoutArgs): Drawn {
 
   if (!slices.length) {
     const msg = emptyMessage(prepared);
-    const lines = wrap(msg.sub, 46, 2);
+    // A little narrower than the card so the second line never holds a lone word.
+    const lines = wrapPx(msg.sub, 300, 12.5, {}, 2);
     parts.push(
       `<g class="fade" ${at(0.2)}><text x="${PAD}" y="${barY + 44}" class="sans" font-size="15" font-weight="600" fill="${p.text}">${esc(msg.title)}</text>` +
         lines.map((l, i) => `<text x="${PAD}" y="${barY + 66 + i * 18}" class="sans" font-size="12.5" fill="${p.muted}">${esc(l)}</text>`).join('') +
@@ -331,9 +323,9 @@ function compactLayout({ prepared, head, p }: LayoutArgs): Drawn {
     const lx = PAD + (i % cols) * colW;
     const ly = first + Math.floor(i / cols) * pitch;
     const pctW = textWidth(s.pct, 12, { mono: true });
-    const name = fit(s.name, colW - 16 - 6 - pctW - 12, 13.5, { weight: 600 });
+    const name = legendName(s.name, colW - 16 - 6 - pctW - 12, 13.5);
     parts.push(
-      `<g class="fade" ${at(0.3 + i * 0.05)}><circle cx="${n(lx + 5)}" cy="${n(ly - 4.5)}" r="5" fill="${s.color}"${edge(s.color, p)}/>` +
+      `<g class="fade" ${at(0.3 + i * 0.05)}><circle cx="${n(lx + 5)}" cy="${n(ly - 4.5)}" r="5" fill="${s.color}"/>` +
         `<text x="${n(lx + 16)}" y="${n(ly)}"><tspan class="sans" font-size="13.5" font-weight="600" fill="${s.other ? p.muted : p.text}">${esc(name)}</tspan>` +
         `<tspan dx="6" class="mono" font-size="12" fill="${p.muted}">${esc(s.pct)}</tspan></text></g>`,
     );

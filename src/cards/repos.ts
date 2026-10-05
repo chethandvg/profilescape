@@ -1,6 +1,22 @@
-import { compact as count, percent, relativeTime, shortDate } from '../core/format.ts';
+import { compact as count, displayName, percent, relativeTime, shortDate } from '../core/format.ts';
 import { readOptions } from '../core/options.ts';
-import { contrast, delay, esc, fit, label, linearGradient, mix, n, shell, textWidth } from '../core/svg.ts';
+import {
+  delay,
+  ensureContrast,
+  esc,
+  fit,
+  fitLabel,
+  label,
+  labelWidth,
+  linearGradient,
+  mix,
+  n,
+  safeColor,
+  shell,
+  textWidth,
+  wrapPx,
+} from '../core/svg.ts';
+import { otherColor } from '../core/themes.ts';
 import type { CardDefinition, CardImage, Palette, ProfileData, RenderContext, RepoInfo } from '../core/types.ts';
 
 /**
@@ -20,12 +36,7 @@ interface Settings {
   title: string | undefined;
 }
 
-type TextOpts = { mono?: boolean; weight?: number };
-
 const NO_DESCRIPTION = 'No description provided.';
-/** label() renders 12px mono with 1.4 letter-spacing. */
-const LABEL_CHAR = 12 * 0.6 + 1.4;
-const HEX = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
 /**
  * textWidth() is calibrated on Segoe UI; SF Pro (macOS/iOS viewers) runs a few
  * percent wider, so proportional text is laid out against a slightly smaller box.
@@ -79,70 +90,12 @@ export function selectRepos(data: ProfileData, limit: number): RepoInfo[] {
 
 // ── Small helpers ───────────────────────────────────────────────────────────
 
-const safeColor = (c: string | null | undefined, fallback: string): string =>
-  c && HEX.test(c.trim()) ? c.trim() : fallback;
-
 const validDate = (iso: string | null | undefined): iso is string => !!iso && Number.isFinite(Date.parse(iso));
-
-const chars = (s: string): string[] => Array.from(s);
-
-const dropLast = (s: string): string => chars(s).slice(0, -1).join('');
 
 const clean = (s: string | null | undefined): string => (s ?? '').replace(/\s+/g, ' ').trim();
 
-/** Pick a foreground that stays readable on `bg`, nudging toward the theme text colour if needed. */
-function readable(fg: string, bg: string, toward: string, min = 4.5): string {
-  let out = fg;
-  for (let k = 0.15; contrast(out, bg) < min && k <= 1; k += 0.15) out = mix(fg, toward, k);
-  return out;
-}
-
-/** Word wrap by estimated pixel width; very long words are split, the last kept line gets an ellipsis. */
-function wrapPx(text: string, maxWidth: number, size: number, maxLines: number, opts: TextOpts = {}): string[] {
-  const w = (s: string) => textWidth(s, size, opts);
-  const words: string[] = [];
-  for (const word of text.split(/\s+/).filter(Boolean)) {
-    if (w(word) <= maxWidth) {
-      words.push(word);
-      continue;
-    }
-    let rest = chars(word);
-    while (rest.length) {
-      let cut = rest.length;
-      while (cut > 1 && w(rest.slice(0, cut).join('')) > maxWidth) cut--;
-      words.push(rest.slice(0, cut).join(''));
-      rest = rest.slice(cut);
-    }
-  }
-  const lines: string[] = [];
-  let cur = '';
-  for (const word of words) {
-    const next = cur ? `${cur} ${word}` : word;
-    if (!cur || w(next) <= maxWidth) cur = next;
-    else {
-      lines.push(cur);
-      cur = word;
-      if (lines.length > maxLines) break;
-    }
-  }
-  if (cur && lines.length <= maxLines) lines.push(cur);
-  if (lines.length <= maxLines) return lines;
-  const kept = lines.slice(0, maxLines);
-  let last = (kept[maxLines - 1] ?? '').replace(/[\s.,;:!?-]+$/, '');
-  while (last && w(`${last}…`) > maxWidth) {
-    const sp = last.lastIndexOf(' ');
-    last = (sp > 0 ? last.slice(0, sp) : dropLast(last)).replace(/[\s.,;:!?-]+$/, '');
-  }
-  kept[maxLines - 1] = `${last}…`;
-  return kept;
-}
-
-/** Truncate text for label() (uppercase mono with letter-spacing). */
-function fitLabel(s: string, maxWidth: number): string {
-  const max = Math.max(1, Math.floor(maxWidth / LABEL_CHAR));
-  const c = chars(s);
-  return c.length <= max ? s : `${c.slice(0, Math.max(1, max - 1)).join('').trimEnd()}…`;
-}
+/** Language colours are data: sanitised, then nudged until they stand out from the card surface. */
+const dataColor = (c: string | null | undefined, p: Palette): string => ensureContrast(safeColor(c, p.faint), p.panel, 1.8, p.text);
 
 const norm = (s: string) =>
   s
@@ -161,11 +114,12 @@ function primaryLanguage(repo: RepoInfo): { name: string; color: string } | null
 export function categoryLabel(repo: RepoInfo, maxWidth: number, maxParts = 2): string {
   const lang = primaryLanguage(repo)?.name;
   const candidates: string[] = [];
-  if (lang) candidates.push(lang);
+  if (lang) candidates.push(displayName(lang));
   const langKey = lang ? norm(lang) : '';
+  const shortKey = lang ? norm(displayName(lang)) : '';
   for (const topic of repo.topics ?? []) {
     const key = norm(topic);
-    if (!key || key === langKey || key === `${langKey}lang` || candidates.some((c) => norm(c) === key)) continue;
+    if (!key || key === langKey || key === shortKey || key === `${langKey}lang` || candidates.some((c) => norm(c) === key)) continue;
     candidates.push(topic);
   }
   if (!candidates.length) return 'REPOSITORY';
@@ -173,7 +127,7 @@ export function categoryLabel(repo: RepoInfo, maxWidth: number, maxParts = 2): s
   for (const c of candidates) {
     if (parts.length >= maxParts) break;
     const next = [...parts, c].join(' · ').toUpperCase();
-    if (parts.length && chars(next).length * LABEL_CHAR > maxWidth) break;
+    if (parts.length && labelWidth(next) > maxWidth) break;
     parts.push(c);
   }
   return fitLabel(parts.join(' · ').toUpperCase(), maxWidth);
@@ -341,7 +295,7 @@ function compactCard(ctx: RenderContext, repo: RepoInfo, s: Settings): string {
   // Description.
   const desc = clean(repo.description);
   if (desc) {
-    const rows = wrapPx(desc, (W - 2 * P) * SAFE, 13.5, lines);
+    const rows = wrapPx(desc, (W - 2 * P) * SAFE, 13.5, {}, lines);
     out.push(
       `<g class="up" ${delay(0.12)}>` +
         rows
@@ -366,9 +320,9 @@ function compactCard(ctx: RenderContext, repo: RepoInfo, s: Settings): string {
   let x = P;
   const lang = primaryLanguage(repo);
   if (lang) {
-    const name = fit(lang.name, 118, 12.5, mono);
+    const name = fit(displayName(lang.name), 118, 12.5, mono);
     foot.push(
-      `<circle cx="${x + 6}" cy="${cy}" r="5.5" fill="${safeColor(lang.color, p.faint)}"/>` +
+      `<circle cx="${x + 6}" cy="${cy}" r="5.5" fill="${dataColor(lang.color, p)}"/>` +
         `<text x="${x + 18}" y="${n(base)}" class="mono" font-size="12.5" fill="${p.text}">${esc(name)}</text>`,
     );
     x += 18 + textWidth(name, 12.5, mono) + 18;
@@ -389,8 +343,8 @@ function compactCard(ctx: RenderContext, repo: RepoInfo, s: Settings): string {
     const agoW = textWidth(ago, 12, mono);
     if (x + agoW + 18 <= W - P) {
       foot.push(
-        icon('clock', W - P - agoW - 10, cy, p.faint, 0.72, 1.7) +
-          `<text x="${W - P}" y="${n(base)}" text-anchor="end" class="mono" font-size="12" fill="${p.faint}">${esc(ago)}</text>`,
+        icon('clock', W - P - agoW - 10, cy, p.muted, 0.72, 1.7) +
+          `<text x="${W - P}" y="${n(base)}" text-anchor="end" class="mono" font-size="12" fill="${p.muted}">${esc(ago)}</text>`,
       );
     }
   }
@@ -427,9 +381,9 @@ function languageSlices(repo: RepoInfo, p: Palette): Slice[] {
     langs = [{ name: primary.name, color: primary.color, value: 1 }];
   }
   const sorted = [...langs].sort((a, b) => b.value - a.value);
-  const top: Slice[] = sorted.slice(0, 5).map((l) => ({ name: l.name, color: safeColor(l.color, p.faint), value: l.value }));
+  const top: Slice[] = sorted.slice(0, 5).map((l) => ({ name: l.name, color: dataColor(l.color, p), value: l.value }));
   const rest = sorted.slice(5).reduce((sum, l) => sum + l.value, 0);
-  if (rest > 0) top.push({ name: 'Other', color: p.faint, value: rest });
+  if (rest > 0) top.push({ name: 'Other', color: otherColor(p, top.map((l) => l.color)), value: rest });
   return top;
 }
 
@@ -472,7 +426,7 @@ function detailCard(ctx: RenderContext, repo: RepoInfo, s: Settings): string {
   const descY = 156;
   const descLh = 28;
   const desc = clean(repo.description);
-  const rows = desc ? wrapPx(desc, CW * SAFE, 18, s.descriptionLines) : [];
+  const rows = desc ? wrapPx(desc, CW * SAFE, 18, {}, s.descriptionLines) : [];
   if (rows.length) {
     out.push(
       `<g class="up" ${delay(0.12)}>` +
@@ -498,7 +452,7 @@ function detailCard(ctx: RenderContext, repo: RepoInfo, s: Settings): string {
     meta.push({
       icon: 'tag',
       color: p.accentB,
-      spans: `<tspan fill="${p.text}" font-weight="600">${esc(t)}</tspan><tspan fill="${p.faint}">${esc(when)}</tspan>`,
+      spans: `<tspan fill="${p.text}" font-weight="600">${esc(t)}</tspan><tspan fill="${p.muted}">${esc(when)}</tspan>`,
       width: textWidth(t + when, 13, mono),
     });
   }
@@ -520,7 +474,7 @@ function detailCard(ctx: RenderContext, repo: RepoInfo, s: Settings): string {
     : '';
   if (home) {
     const t = fit(home, 260, 13, mono);
-    const color = readable(p.accentB, p.panel, p.text, 3.5);
+    const color = ensureContrast(p.accentB, p.panel, 3.5, p.text);
     meta.push({ icon: 'globe', color, spans: `<tspan fill="${color}">${esc(t)}</tspan>`, width: textWidth(t, 13, mono) });
   }
   let mx = P;
@@ -552,7 +506,7 @@ function detailCard(ctx: RenderContext, repo: RepoInfo, s: Settings): string {
       `<g class="up" ${delay(0.22 + i * 0.06)}>` +
         `<rect x="${n(tx)}" y="${y}" width="${n(tileW)}" height="${tileH}" rx="14" fill="${p.panelAlt}" stroke="${p.border}"/>` +
         icon(kind, tx + 28, y + 30, p.accentB, 1, 1.5) +
-        `<text x="${n(tx + 46)}" y="${y + 34.5}" class="mono" font-size="12" letter-spacing="1" fill="${p.faint}">${esc(name.toUpperCase())}</text>` +
+        `<text x="${n(tx + 46)}" y="${y + 34.5}" class="mono" font-size="12" letter-spacing="1" fill="${p.muted}">${esc(name.toUpperCase())}</text>` +
         `<text x="${n(tx + 20)}" y="${y + 74}" class="sans" font-size="30" font-weight="800" letter-spacing="-.8" fill="${p.text}">${esc(v)}</text>` +
         '</g>',
     );
@@ -568,7 +522,7 @@ function detailCard(ctx: RenderContext, repo: RepoInfo, s: Settings): string {
     const barY = y + 16;
     const barH = 10;
     out.push(
-      `<text x="${P}" y="${y}" class="mono" font-size="12" letter-spacing="1.2" fill="${p.faint}">LANGUAGES</text>` +
+      `<text x="${P}" y="${y}" class="mono" font-size="12" letter-spacing="1.2" fill="${p.muted}">LANGUAGES</text>` +
         `<rect x="${P}" y="${barY}" width="${CW}" height="${barH}" rx="${barH / 2}" fill="${p.empty}"/>`,
     );
     defs += `<clipPath id="rp-lang"><rect x="${P}" y="${barY}" width="${CW}" height="${barH}" rx="${barH / 2}"/></clipPath>`;
@@ -608,13 +562,13 @@ function detailCard(ctx: RenderContext, repo: RepoInfo, s: Settings): string {
   const topics = (repo.topics ?? []).map(clean).filter(Boolean);
   if (topics.length) {
     y += 46;
-    out.push(`<text x="${P}" y="${y}" class="mono" font-size="12" letter-spacing="1.2" fill="${p.faint}">TOPICS</text>`);
+    out.push(`<text x="${P}" y="${y}" class="mono" font-size="12" letter-spacing="1.2" fill="${p.muted}">TOPICS</text>`);
     const chipY = y + 14;
     const chipH = 28;
     const chipGap = 8;
     const chipFill = mix(p.panel, p.accentB, 0.1);
     const chipStroke = mix(p.panel, p.accentB, 0.28);
-    const chipText = readable(p.accentB, chipFill, p.text);
+    const chipText = ensureContrast(p.accentB, chipFill, 4.5, p.text);
     const widths = topics.map((t) => {
       const text = fit(t, 300, 12.5, mono);
       return { text, w: textWidth(text, 12.5, mono) + 26 };
@@ -682,7 +636,7 @@ function placeholder(ctx: RenderContext, s: Settings): CardImage {
       `<g class="up" ${delay(0.05)}><circle cx="${P + 24}" cy="96" r="24" fill="${p.chipBg}" stroke="${p.border}"/>${icon('book', P + 24, 96, p.accentB, 1.3, 1.5)}</g>`,
     );
     const tx = P + 64;
-    const rows = wrapPx(message, (W - P - tx) * SAFE, 13, 3);
+    const rows = wrapPx(message, (W - P - tx) * SAFE, 13, {}, 3);
     out.push(
       `<g class="up" ${delay(0.12)}><text x="${tx}" y="82" class="sans" font-size="17" font-weight="700" letter-spacing="-.2" fill="${p.text}">${heading}</text>` +
         rows.map((r, i) => `<text x="${tx}" y="${104 + i * 19}" class="sans" font-size="13" fill="${p.muted}">${esc(r)}</text>`).join('') +

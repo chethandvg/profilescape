@@ -5,7 +5,8 @@ name: Release
 #   2. every single-purpose mirror listed in actions/manifest.json, each with
 #      its own release, version tag and major tag;
 #   3. the profile template repository (contents only, no tags).
-# One-time setup and the manual Marketplace step are in docs/RELEASING.md.
+# One-time setup (including the "release" environment that holds MIRROR_TOKEN)
+# and the manual Marketplace step are in docs/RELEASING.md.
 
 on:
   push:
@@ -90,6 +91,9 @@ jobs:
       - name: Check generated Action files
         run: node scripts/gen-actions.ts --check
 
+      - name: Check gallery images and doc tables
+        run: node scripts/gallery.ts --check
+
       - name: List mirrors
         id: mirrors
         run: echo "list=$(node scripts/gen-actions.ts --matrix)" >> "$GITHUB_OUTPUT"
@@ -97,6 +101,9 @@ jobs:
   release:
     name: Publish ${{ github.ref_name }}
     needs: verify
+    # MIRROR_TOKEN is a secret of the "release" environment, which only accepts
+    # v*.*.* tags, so workflows on other branches and tags cannot read it.
+    environment: release
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -145,6 +152,7 @@ jobs:
     needs:
       - verify
       - release
+    environment: release
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -167,12 +175,15 @@ jobs:
           persist-credentials: false
 
       - name: Push the release to the mirror
+        id: push
         env:
           MIRROR_TOKEN: ${{ secrets.MIRROR_TOKEN }}
         run: |
           if [ -z "$MIRROR_TOKEN" ]; then
-            echo "::error title=MIRROR_TOKEN is not set::Add the secret described in docs/RELEASING.md."
-            exit 1
+            # Not configured yet: skip loudly instead of failing the whole release.
+            echo "::warning title=MIRROR_TOKEN is not set::Skipped. Add it as a secret of the release environment (docs/RELEASING.md) to sync this repository automatically."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
           src="$GITHUB_WORKSPACE"
           dir="$RUNNER_TEMP/mirror"
@@ -213,6 +224,7 @@ jobs:
           echo "Pushed $TAG to $GITHUB_REPOSITORY_OWNER/$REPO."
 
       - name: Create the mirror release
+        if: steps.push.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ secrets.MIRROR_TOKEN }}
         run: |
@@ -241,6 +253,7 @@ jobs:
       - verify
       - release
     if: needs.verify.outputs.prerelease != 'true'
+    environment: release
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -259,8 +272,10 @@ jobs:
           SHA: ${{ needs.verify.outputs.sha }}
         run: |
           if [ -z "$MIRROR_TOKEN" ]; then
-            echo "::error title=MIRROR_TOKEN is not set::Add the secret described in docs/RELEASING.md."
-            exit 1
+            # Not configured yet: skip loudly instead of failing the whole release.
+            echo "::warning title=MIRROR_TOKEN is not set::Skipped. Add it as a secret of the release environment (docs/RELEASING.md) to sync this repository automatically."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
           repo="$(jq -r .template.repo actions/manifest.json)"
           src="$GITHUB_WORKSPACE/template"

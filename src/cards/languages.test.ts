@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 import { DEMO_NOW, demoProfile, emptyProfile } from '../core/fixtures.ts';
 import { applyOverrides, getTheme } from '../core/themes.ts';
 import type { CardOptions, LanguageStat, Mode, ProfileData } from '../core/types.ts';
+import { contrast } from '../core/svg.ts';
 import { card, percentLabels, pickSource, prepareLanguages } from './languages.ts';
 
 const theme = getTheme('aurora');
@@ -81,6 +82,28 @@ describe('languages card', () => {
     );
   });
 
+  it('keeps dark language colours visible on dark panels', () => {
+    const list = [lang('PowerShell', 5, '#012456'), lang('TypeScript', 3, '#3178c6')];
+    const dark = prepareLanguages(list, { hide: [], top: 6 }, palette);
+    const ps = dark.slices[0]!.color;
+    assert.notEqual(ps, '#012456');
+    assert.ok(contrast(ps, palette.panel) >= 1.8, ps);
+    assert.equal(dark.slices[1]!.color, '#3178c6', 'colours that already read are untouched');
+    // On a light panel the original navy already stands out.
+    assert.equal(prepareLanguages(list, { hide: [], top: 6 }, theme.light).slices[0]!.color, '#012456');
+    const svg = render({ ...demoProfile(), languages: list }).svg;
+    assert.ok(svg.includes(`fill="${ps}"`) && !svg.includes('#012456'));
+  });
+
+  it('keeps full language names in the legend, shortening only where they cannot fit', () => {
+    const data = { ...demoProfile(), languages: [lang('Jupyter Notebook', 5), lang('Go', 3)] };
+    for (const layout of ['bar', 'donut'] as const) assert.ok(render(data, { layout }).svg.includes('>Jupyter Notebook<'), layout);
+    // The half-width card has no room for it: the short name beats a mid-word ellipsis.
+    const compact = render(data, { layout: 'compact' }).svg;
+    assert.ok(compact.includes('>Jupyter<'));
+    assert.ok(!/Jupyter N[^<]*…/.test(compact));
+  });
+
   it('falls back to code size when commit weighting has no data', () => {
     const data = { ...demoProfile(), languages: [] };
     assert.equal(pickSource(data, 'commits').weighting, 'bytes');
@@ -119,9 +142,9 @@ describe('languages card', () => {
   it('states the weighting honestly', () => {
     const bytes = render(demoProfile(), { weighting: 'bytes' });
     assert.ok(bytes.svg.includes('LANGUAGES · BY CODE SIZE'));
-    assert.ok(bytes.svg.includes('7 repositories'));
+    assert.ok(bytes.svg.includes('7 REPOSITORIES'), 'the info is a muted label, like the stack count');
     const custom = render(demoProfile(), { title: 'Polyglot' });
-    assert.ok(custom.svg.includes('>POLYGLOT<') && custom.svg.includes('by commits ·'));
+    assert.ok(custom.svg.includes('>POLYGLOT<') && custom.svg.includes('BY COMMITS ·'));
   });
 
   it('supports top, hide and hideTitle', () => {

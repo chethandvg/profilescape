@@ -22,6 +22,8 @@ node scripts/gen-actions.ts --repo-commands
 
 They create the six mirror repositories and `profilescape-template` (public), then set descriptions, homepages and topics, disable issues, wiki and projects on the mirrors (support is routed here), and mark `profilescape-template` as a **template repository**. The `gh repo edit` commands are safe to re-run whenever the manifest changes. Repositories can start empty; the first release creates their `main` branch.
 
+The last two commands create the `release` deployment environment in `chethandvg/profilescape` and allow only tags matching `v*.*.*` to deploy to it. To do the same by hand: **Settings → Environments → New environment** `release`, then under **Deployment branches and tags** choose *Selected branches and tags* and add a **tag** rule `v*.*.*`.
+
 ### 2. Create the `MIRROR_TOKEN` secret
 
 Create a [fine-grained personal access token](https://github.com/settings/personal-access-tokens/new):
@@ -34,7 +36,15 @@ Create a [fine-grained personal access token](https://github.com/settings/person
   - **Workflows: Read and write** (required because the template contains `.github/workflows/profilescape.yml`)
   - Metadata: Read-only (added automatically)
 
-Save it in `chethandvg/profilescape` under **Settings → Secrets and variables → Actions** as `MIRROR_TOKEN`. Only the release workflow uses it, it only runs for tags pushed to this repository, and it never runs in forks.
+Save it as an **environment secret** of `release`, not as a repository secret:
+
+```sh
+gh secret set MIRROR_TOKEN --env release --repo chethandvg/profilescape   # prompts for the value
+```
+
+(or **Settings → Environments → release → Environment secrets**). A repository secret would be readable by a workflow on any branch pushed by anyone with write access. An environment secret only reaches jobs that name the environment, and the tag rule above only lets jobs started from a `v*.*.*` tag in. The release workflow's `release`, `mirrors` and `template` jobs are the only jobs that do, and forks never get the secret. If you created `MIRROR_TOKEN` as a repository secret earlier, move it to the environment and delete the repository secret (`gh secret delete MIRROR_TOKEN --repo chethandvg/profilescape`).
+
+Anyone who can push a `v*.*.*` tag can still start the release, so restrict who can create release tags with the tag ruleset in step 3. For a manual gate as well, add yourself as a **required reviewer** of the environment: the jobs that use the token then wait in the run until you approve them.
 
 > [!NOTE]
 > The release workflow moves the umbrella's own major tag with the workflow token. If a release changes files in `.github/workflows/`, GitHub may refuse that, and the workflow falls back to `MIRROR_TOKEN`. To make the fallback work, also give the token access to `chethandvg/profilescape` (same permissions), or move the tag by hand with the command the failed step prints.
@@ -46,7 +56,7 @@ Save it in `chethandvg/profilescape` under **Settings → Secrets and variables 
 - **Pages → Build and deployment → Source:** *GitHub Actions*. `.github/workflows/pages.yml` deploys the site on every push to `main`.
 - **Features → Discussions:** enable it; the issue chooser links there.
 - **Labels:** create the `theme` label used by the theme proposal form: `gh label create theme --color 8B7CFF --description "New or updated colour theme"`.
-- **Rulesets (recommended):** protect `main` (require the CI checks, block force pushes) and protect release tags (`v*.*.*`) from updates and deletion. Leave the moving major tags (`v1`) unprotected so the release workflow can move them.
+- **Rulesets (recommended):** protect `main` (require the CI checks, block force pushes) and protect release tags (`v*.*.*`): restrict creation to yourself (add yourself to the bypass list) and block updates and deletion. Leave the moving major tags (`v1`) unprotected so the release workflow can move them.
 
 ### 4. Optional: a token for the self-test
 
@@ -74,7 +84,7 @@ Save it in `chethandvg/profilescape` under **Settings → Secrets and variables 
    ```
 
 4. Watch **Actions → Release**. It:
-   - checks the tag matches `package.json`, is on `main`, passes typecheck, tests and build, and that `dist/` and the generated files are current;
+   - checks the tag matches `package.json`, is on `main`, passes typecheck, tests and build, and that `dist/`, the generated Action files and the gallery images are current;
    - creates the umbrella release with generated notes and moves `v1`;
    - pushes every mirror in parallel, tags it `v1.4.0` and `v1`, and creates its release, linking back to the umbrella release;
    - syncs `template/` to `profilescape-template`.
@@ -99,5 +109,9 @@ The Marketplace name comes from `name` in each `action.yml` and must be unique, 
 
 1. Edit [`actions/manifest.json`](../actions/manifest.json): repository, unique Marketplace name, description under 125 characters, cards, branding, topics, an "about" paragraph and a preview image name under `docs/images/`.
 2. Run `npm run gen:actions`. It writes `mirrors/<repo>/` and removes folders of mirrors that no longer exist.
-3. Create the repository with `node scripts/gen-actions.ts --repo-commands`, and add it to `MIRROR_TOKEN`.
+3. Create the repository with `node scripts/gen-actions.ts --repo-commands`, and add it to the repositories `MIRROR_TOKEN` can access.
 4. Commit, release, and publish the new action to the Marketplace as described above.
+
+## Without MIRROR_TOKEN
+
+If the `release` environment has no `MIRROR_TOKEN` secret, the mirror and template jobs skip with a warning annotation instead of failing, so the umbrella release still completes. Add the secret and re-run the failed-or-skipped jobs (or cut the next release) to sync the mirrors.

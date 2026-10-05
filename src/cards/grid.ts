@@ -1,7 +1,7 @@
-import { levelScale, yearWindow, type CalendarCell, type Level } from '../core/calendar.ts';
+import { lastYear, levelScale, monthStarts, yearTotal, yearWindow, type CalendarCell, type Level } from '../core/calendar.ts';
 import { MONTHS, plural, shortDate } from '../core/format.ts';
 import { readOptions } from '../core/options.ts';
-import { esc, label, linearGradient, mix, n, shell, textWidth } from '../core/svg.ts';
+import { esc, fitLabel, label, labelWidth, linearGradient, mix, n, shell, textWidth } from '../core/svg.ts';
 import { contribRamp } from '../core/themes.ts';
 import type { CardDefinition, CardImage, Mode, OptionDoc, Palette, RenderContext } from '../core/types.ts';
 
@@ -213,23 +213,11 @@ function layout(o: {
 }
 
 function monthLabels(cells: CalendarCell[], weeks: number, L: Layout, p: Palette): string {
-  const starts: { week: number; month: number }[] = [];
-  let prev = -1;
-  for (let w = 0; w < weeks; w++) {
-    const first = cells[w * 7];
-    if (!first) continue;
-    const month = Number(first.date.slice(5, 7)) - 1;
-    if (month !== prev) starts.push({ week: w, month });
-    prev = month;
-  }
+  // Shared with the 3D card: a partial first month is labelled only when there is
+  // room before the next label, and a final month under two columns is skipped.
   const minGap = Math.ceil((textWidth('Mmm', AXIS, { mono: true }) + 8) / L.pitch);
   const out: string[] = [];
-  for (let i = 0; i < starts.length; i++) {
-    const s = starts[i];
-    if (!s) continue;
-    const next = starts[i + 1];
-    // A partial first month only gets a label when there is room before the next one.
-    if (i === 0 && next && next.week - s.week < minGap) continue;
+  for (const s of monthStarts(cells, weeks, minGap)) {
     const name = MONTHS[s.month] ?? '';
     const x = L.gx + s.week * L.pitch;
     if (x + textWidth(name, AXIS, { mono: true }) > L.gx + L.gridW + 1) continue;
@@ -244,7 +232,7 @@ function monthLabels(cells: CalendarCell[], weeks: number, L: Layout, p: Palette
     const y = L.gy + d * L.pitch + L.cell / 2 + AXIS * 0.35;
     out.push(`<text x="${n(L.gx - 12)}" y="${n(y)}" text-anchor="end">${name}</text>`);
   }
-  return `<g class="mono fade" font-size="${AXIS}" fill="${p.faint}">${out.join('')}</g>`;
+  return `<g class="mono fade" font-size="${AXIS}" fill="${p.muted}">${out.join('')}</g>`;
 }
 
 function legend(L: Layout, ramp: readonly string[], p: Palette): string {
@@ -260,7 +248,7 @@ function legend(L: Layout, ramp: readonly string[], p: Palette): string {
     )
     .join('');
   return (
-    `<g class="mono" font-size="${AXIS}" fill="${p.faint}">` +
+    `<g class="mono" font-size="${AXIS}" fill="${p.muted}">` +
     `<text x="${n(cellsLeft - 8)}" y="${n(L.footY)}" text-anchor="end">Less</text>${swatches}` +
     `<text x="${n(right)}" y="${n(L.footY)}" text-anchor="end">More</text></g>`
   );
@@ -424,7 +412,15 @@ function renderGrid(ctx: RenderContext): CardImage {
   const ramp = contribRamp(p, ctx.mode);
   const cells = yearWindow(ctx.data.calendar ?? [], ctx.now, weeks).map((c) => ({ ...c, count: safeCount(c.count) }));
   const level = levelScale(cells.map((c) => c.count));
-  const stats = summarize(cells);
+  // The grid draws whole weeks (365 to 371 days), but a full-year card states
+  // GitHub's "last year", like the stats and 3D cards: total, active days and
+  // best day cover lastYear() exactly, whatever the weekday.
+  const fullYear = weeks >= 52;
+  const counted = fullYear
+    ? lastYear(ctx.data.calendar ?? [], ctx.now).map((d) => ({ ...d, week: 0, day: 0, count: safeCount(d.count) }))
+    : cells;
+  const stats = summarize(counted);
+  if (fullYear) stats.total = yearTotal(ctx.data, ctx.now);
   const first = cells[0];
   const last = cells[cells.length - 1];
   const range = first && last ? `${shortDate(first.date)} – ${shortDate(last.date)}` : '';
@@ -482,10 +478,10 @@ function renderGrid(ctx: RenderContext): CardImage {
   body.push(motion.under);
   body.push(`<g>${columns.join('')}</g>`);
   body.push(motion.over);
-  if (stats.total === 0) body.push(emptyMessage(L, p));
+  if (cells.every((c) => c.count === 0)) body.push(emptyMessage(L, p));
   if (range) {
     body.push(
-      `<text x="${n(L.gx)}" y="${n(L.footY)}" class="mono fade" font-size="${AXIS}" fill="${p.faint}">${esc(range)}</text>`,
+      `<text x="${n(L.gx)}" y="${n(L.footY)}" class="mono fade" font-size="${AXIS}" fill="${p.muted}">${esc(range)}</text>`,
     );
   }
   body.push(`<g class="fade">${legend(L, ramp, p)}</g>`);
@@ -508,18 +504,6 @@ function renderGrid(ctx: RenderContext): CardImage {
     animate: ctx.animate,
   });
   return { name: 'grid', alt: `Contribution grid: ${summary}`, svg, layout: 'full' };
-}
-
-/** Rendered width of a label(): 12px mono, upper-cased, 1.4px tracking. */
-const labelWidth = (s: string): number => textWidth(s.toUpperCase(), 12, { mono: true }) + [...s].length * 1.4;
-
-/** Keep long custom titles inside the card. */
-function fitLabel(text: string, maxWidth: number): string {
-  if (labelWidth(text) <= maxWidth) return text;
-  // Slice by code point so emoji are never split into lone surrogates.
-  const chars = [...text];
-  while (chars.length > 1 && labelWidth(`${chars.join('')}…`) > maxWidth) chars.pop();
-  return `${chars.join('').trimEnd()}…`;
 }
 
 export const card: CardDefinition = {

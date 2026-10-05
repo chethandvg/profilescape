@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
-import { contrast, luminance } from './svg.ts';
+import { contrast, labelColor, lightness, luminance } from './svg.ts';
 import { PRESETS } from './theme-presets.ts';
-import { applyOverrides, contribRamp, DEFAULT_THEME, getTheme, themeIds, themeList, THEMES } from './themes.ts';
+import { applyOverrides, contribRamp, DEFAULT_THEME, getTheme, RAMP_STEP, themeIds, themeList, THEMES } from './themes.ts';
 import type { Mode, Palette, SyntaxPalette, Theme } from './types.ts';
 
 const MODES: Mode[] = ['dark', 'light'];
@@ -114,7 +114,8 @@ describe('palettes', () => {
         const faint = ratio(p.faint, p.panel);
         assert.ok(text >= 7, `text ${p.text} on ${p.panel}: ${text}`);
         assert.ok(muted >= 4.5, `muted ${p.muted} on ${p.panel}: ${muted}`);
-        assert.ok(faint >= 2.4, `faint ${p.faint} on ${p.panel}: ${faint}`);
+        // faint is for separators, placeholders and decoration; informative text uses muted.
+        assert.ok(faint >= 3, `faint ${p.faint} on ${p.panel}: ${faint}`);
         assert.ok(text > muted && muted > faint, `tiers out of order: ${text} > ${muted} > ${faint}`);
         // Text also sits on raised tiles.
         assert.ok(ratio(p.text, p.panelAlt) >= 6, `text on panelAlt: ${ratio(p.text, p.panelAlt)}`);
@@ -173,6 +174,23 @@ describe('palettes', () => {
         for (let i = 2; i < ramp.length; i++) {
           assert.ok(ratio(ramp[i] as string, empty) >= first, `level ${i} must stand out from empty at least as much as level 1`);
         }
+      });
+
+      test('contribution ramp gets lighter (dark) or darker (light) at every level', () => {
+        const ramp = contribRamp(p, mode);
+        for (let i = 1; i < ramp.length; i++) {
+          const a = ramp[i - 1] as string;
+          const b = ramp[i] as string;
+          const step = mode === 'dark' ? lightness(b) - lightness(a) : lightness(a) - lightness(b);
+          assert.ok(step >= RAMP_STEP - 0.01, `levels ${i - 1}→${i} (${a} → ${b}): L* step ${step.toFixed(1)}`);
+          assert.ok(ratio(a, b) >= 1.2, `levels ${i - 1}→${i} (${a} → ${b}): contrast ${ratio(a, b)}`);
+        }
+      });
+
+      test('header labels reach small-text contrast', () => {
+        const c = labelColor(p);
+        assert.ok(ratio(c, p.panel) >= 4.5, `label ${c} on ${p.panel}: ${ratio(c, p.panel)}`);
+        if (ratio(p.accentB, p.panel) >= 4.5) assert.equal(c, p.accentB, 'an accent that already passes is used as is');
       });
     });
   }

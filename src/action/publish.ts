@@ -5,6 +5,10 @@ import { createHash } from 'node:crypto';
  * Data API (no git binary needed). Every publish is a single orphan commit, so
  * the branch never accumulates history, and nothing is committed when the
  * rendered tree is identical to what the branch already holds.
+ *
+ * Because a publish replaces the branch wholesale, an existing branch is only
+ * replaced when it is not the repository's default branch and its latest commit
+ * looks like an earlier publish: an orphan commit containing the marker file.
  */
 
 export interface PublishFile {
@@ -30,6 +34,11 @@ export interface PublishOptions {
   concurrency?: number;
   /** Base delay between retries of transient failures (default 600 ms). */
   retryDelayMs?: number;
+  /**
+   * A file every publish contains (default "README-snippet.md"). An existing
+   * branch is only replaced when its latest commit is an orphan holding it.
+   */
+  markerFile?: string;
 }
 
 export interface PublishResult {
@@ -203,6 +212,48 @@ export function restClient(o: RestOptions): RestClient {
   };
 }
 
+interface CommitInfo {
+  sha: string;
+  tree: { sha: string };
+  parents?: { sha: string }[];
+}
+
+/**
+ * Refuse to replace a branch Profilescape did not create: the default branch,
+ * or any branch whose latest commit has history or lacks the marker file.
+ */
+async function assertReplaceable(
+  api: RestClient,
+  repoPath: string,
+  o: PublishOptions,
+  marker: string,
+  commit: CommitInfo,
+): Promise<void> {
+  const advice =
+    `Publishing replaces the whole branch with a single commit of SVG files, so Profilescape only writes to a dedicated branch. ` +
+    `Set the "branch" input to a new name such as "profilescape-output" (the default)`;
+  const repo = await api.call<{ default_branch?: string } | null>('GET', repoPath, 'read the repository settings');
+  if (repo.data && repo.data.default_branch === o.branch) {
+    throw new PublishError(
+      `Refusing to publish to "${o.branch}": it is the default branch of ${o.repository}. ${advice}, and use the "readme" input to keep your README up to date.`,
+    );
+  }
+  let reason = (commit.parents ?? []).length ? 'its latest commit has history' : '';
+  if (!reason) {
+    const tree = await api.call<{ tree?: { path: string; type: string }[] } | null>(
+      'GET',
+      `${repoPath}/git/trees/${commit.tree.sha}`,
+      `read the files on "${o.branch}"`,
+    );
+    if (!(tree.data?.tree ?? []).some((e) => e.path === marker && e.type === 'blob')) reason = `it has no ${marker}`;
+  }
+  if (reason) {
+    throw new PublishError(
+      `Branch "${o.branch}" already exists and was not created by Profilescape (${reason}). ${advice}, or delete "${o.branch}" first if its contents are disposable.`,
+    );
+  }
+}
+
 async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
   const out: R[] = new Array(items.length);
   let next = 0;
@@ -235,20 +286,25 @@ export async function publishToBranch(o: PublishOptions): Promise<PublishResult>
   const baseUrl = rawBaseUrl(o.repository, o.branch, o.serverUrl);
   const branchUrl = branchWebUrl(o.repository, o.branch, o.serverUrl);
 
+  const marker = o.markerFile ?? 'README-snippet.md';
+
   // 1. Current state of the branch, if it exists.
-  const current = await api.call<{ object?: { sha: string; type: string } } | unknown[]>(
-    'GET',
-    `${repoPath}/git/ref/heads/${ref}`,
-    `read branch "${o.branch}"`,
-    undefined,
-    [404],
-  );
-  const headSha = current.status === 200 && !Array.isArray(current.data) ? current.data.object?.sha : undefined;
-  let existingTree: string | undefined;
-  if (headSha) {
-    const commit = await api.call<{ tree: { sha: string } }>('GET', `${repoPath}/git/commits/${headSha}`, `read the latest commit of "${o.branch}"`);
-    existingTree = commit.data.tree.sha;
-  }
+  const readHead = async (): Promise<CommitInfo | undefined> => {
+    const current = await api.call<{ object?: { sha: string; type: string } } | unknown[]>(
+      'GET',
+      `${repoPath}/git/ref/heads/${ref}`,
+      `read branch "${o.branch}"`,
+      undefined,
+      [404],
+    );
+    const sha = current.status === 200 && !Array.isArray(current.data) ? current.data?.object?.sha : undefined;
+    if (!sha) return undefined;
+    const commit = await api.call<Omit<CommitInfo, 'sha'>>('GET', `${repoPath}/git/commits/${sha}`, `read the latest commit of "${o.branch}"`);
+    return { ...commit.data, sha };
+  };
+  const head = await readHead();
+  const headSha = head?.sha;
+  const existingTree = head?.tree.sha;
 
   // 2. Cheap local check: identical tree means nothing to upload.
   const local = o.files.map((f) => ({ path: f.path, sha: gitBlobSha(f.content), content: f.content }));
@@ -257,6 +313,9 @@ export async function publishToBranch(o: PublishOptions): Promise<PublishResult>
     log(`Branch "${o.branch}" is already up to date (tree ${existingTree.slice(0, 7)}); nothing to publish.`);
     return { status: 'unchanged', commitSha: headSha, treeSha: existingTree, baseUrl, branchUrl };
   }
+
+  // Never wipe a branch that holds something else (e.g. "main" or "gh-pages").
+  if (head) await assertReplaceable(api, repoPath, o, marker, head);
 
   // 3. Upload blobs (each distinct content once).
   const unique = [...new Map(local.map((f) => [f.sha, f])).values()];
@@ -309,7 +368,10 @@ export async function publishToBranch(o: PublishOptions): Promise<PublishResult>
     if (!/already exists/i.test(message)) {
       throw new PublishError(describeFailure(422, JSON.stringify({ message }), `create branch "${o.branch}"`, o), 422);
     }
-    // Someone created the branch in the meantime (e.g. a concurrent run): take it over.
+    // Someone created the branch in the meantime (e.g. a concurrent run): take it
+    // over, but only if that branch is an earlier publish too.
+    const raced = await readHead();
+    if (raced) await assertReplaceable(api, repoPath, o, marker, raced);
     await update();
     log(`Updated branch "${o.branch}" -> ${commitSha.slice(0, 7)}.`);
     return { status: 'updated', commitSha, treeSha, baseUrl, branchUrl };

@@ -14,6 +14,7 @@ import {
   formatBytes,
   loadConfigText,
   readInputs,
+  runningActionDefaults,
   writeFiles,
   type Env,
   type Logger,
@@ -82,6 +83,9 @@ export function friendlyError(err: unknown): string {
         'or remove the "token" input to fall back to the workflow token (public data only).'
       );
     }
+    if (err.type === 'ORGANIZATION') {
+      return `${err.message}\nThe "username" input defaults to the repository owner; in an organization's repository, set it to your personal login.`;
+    }
     if (err.status === 404) return `${err.message}\nCheck the "username" input (it defaults to the repository owner).`;
     if (err.status === 403 || err.status === 429) {
       return `${err.message}\nIf this is a rate limit, the next scheduled run will succeed; otherwise check that the "token" input can read the profile.`;
@@ -113,7 +117,8 @@ function graphqlUrl(env: Env): string | undefined {
 
 function describeConfig(r: ResolvedConfig): string[] {
   const { config: c, settings: s, sources } = r;
-  const src = (k: keyof ResolvedConfig['sources']) => (sources[k] === 'default' ? '' : `  (${sources[k]})`);
+  const src = (k: keyof ResolvedConfig['sources']) =>
+    sources[k] === 'default' ? '' : `  (${sources[k]}${r.overridden.includes(k) ? `; overrides config.${k}` : ''})`;
   const list = (v: string[]) => (v.length ? v.join(', ') : '-');
   return [
     `username         ${c.username}`,
@@ -209,7 +214,12 @@ export async function run(deps: RunDeps = {}): Promise<number> {
 
     const loaded = loadConfigText(inputs.config ?? '', workspace);
     const json = loaded ? parseConfigJson(loaded.text, loaded.source) : undefined;
-    const resolved = resolveConfig(inputs, json, { defaultUsername: env.GITHUB_REPOSITORY_OWNER, ignoreDefaultInputs: true });
+    const resolved = resolveConfig(inputs, json, {
+      defaultUsername: env.GITHUB_REPOSITORY_OWNER,
+      ignoreDefaultInputs: true,
+      // A single-purpose mirror declares its own cards default; it must count as "not set" too.
+      inputDefaults: runningActionDefaults(env),
+    });
     const { config, settings } = resolved;
     for (const w of resolved.warnings) log.warning(w, { title: 'Profilescape config' });
 
@@ -227,12 +237,28 @@ export async function run(deps: RunDeps = {}): Promise<number> {
         'GITHUB_REPOSITORY is not set, so there is nowhere to publish. Run inside GitHub Actions, or set "publish: none" (and no "readme") to only write files.',
       );
     }
+    // Writes use github_token only: falling back to the read token would quietly write with a PAT.
+    if ((settings.publish === 'branch' || settings.readme) && !settings.githubToken) {
+      throw new ConfigError(
+        'No github_token: the "github_token" input is empty, but publishing and README updates need it. It defaults to ${{ github.token }}; ' +
+          'if you overrode it, check that the secret exists and is spelled correctly. The "token" input is only ever used to read.',
+      );
+    }
 
     // 1. Data
     log.group(`Fetching GitHub data for @${config.username}`);
-    if (config.includePrivate && settings.token.startsWith('ghs_')) {
+    const workflowToken = settings.token.startsWith('ghs_');
+    if (config.includePrivate && workflowToken) {
       log.info(
         'Using the workflow token, which sees public activity only. To include private contributions, pass a personal access token as the "token" input.',
+      );
+    }
+    if (!config.includePrivate && !workflowToken) {
+      log.warning(
+        'include_private is false, so private repositories are left out of repository and language statistics. ' +
+          'Contribution counts (calendar, totals and streaks) still include the private contributions this token can see. ' +
+          'For public contribution counts only, remove the "token" input to use the workflow token.',
+        { title: 'Private contributions are still counted' },
       );
     }
     const data = await fetchProfile({
@@ -303,6 +329,7 @@ export async function run(deps: RunDeps = {}): Promise<number> {
         serverUrl: env.GITHUB_SERVER_URL,
         fetchImpl: deps.fetchImpl,
         retryDelayMs: deps.retryDelayMs,
+        markerFile: SNIPPET_FILE,
         log: (m) => log.info(m),
       });
       log.info(`Cards are served from ${published.baseUrl}`);

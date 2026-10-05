@@ -14,6 +14,8 @@ import {
   majorTag,
   mirrorsOf,
   renderActionYml,
+  RELEASE_ENVIRONMENT,
+  RELEASE_TAG_PATTERN,
   renderMirrorReadme,
   repoCommands,
   ROOT,
@@ -451,6 +453,9 @@ describe('mirrors', () => {
     for (const entry of manifest.actions) assert.ok(commands.includes(`gh repo edit ${manifest.owner}/${entry.repo} `), entry.repo);
     assert.match(commands, new RegExp(`gh repo edit ${manifest.owner}/${manifest.template.repo} --template`));
     assert.doesNotMatch(commands, new RegExp(`gh repo create ${manifest.owner}/${manifest.umbrella} `));
+    const env = `repos/${manifest.owner}/${manifest.umbrella}/environments/${RELEASE_ENVIRONMENT}`;
+    assert.ok(commands.includes(`gh api --method PUT ${env} `), 'creates the release environment');
+    assert.ok(commands.includes(`gh api --method POST ${env}/deployment-branch-policies -f name='${RELEASE_TAG_PATTERN}' -f type=tag`), 'limits it to version tags');
   });
 });
 
@@ -500,7 +505,7 @@ describe('workflows', () => {
 
   test('release never runs in forks and publishes after verifying', () => {
     const wf = asMap(parseYaml(read('.github/workflows/release.yml')), 'release');
-    assert.deepEqual(asMap(asMap(wf.on, 'on').push, 'push').tags, ['v*.*.*']);
+    assert.deepEqual(asMap(asMap(wf.on, 'on').push, 'push').tags, [RELEASE_TAG_PATTERN]);
     const jobs = asMap(wf.jobs, 'jobs');
     assert.match(String(asMap(jobs.verify, 'verify').if), /github\.repository == 'chethandvg\/profilescape'/);
     for (const [id, job] of Object.entries(jobs)) {
@@ -509,6 +514,26 @@ describe('workflows', () => {
       assert.ok(needs === 'verify' || (Array.isArray(needs) && needs.includes('verify')), `${id} needs verify`);
     }
     assert.match(JSON.stringify(asMap(jobs.mirrors, 'mirrors').strategy), /fromJSON\(needs\.verify\.outputs\.mirrors\)/);
+  });
+
+  test('only release jobs in the release environment read MIRROR_TOKEN', () => {
+    let readers = 0;
+    for (const file of files) {
+      const jobs = asMap(asMap(parseYaml(read(file)), file).jobs, 'jobs');
+      for (const [id, job] of Object.entries(jobs)) {
+        if (!JSON.stringify(job).includes('secrets.MIRROR_TOKEN')) continue;
+        readers++;
+        assert.equal(file, '.github/workflows/release.yml', `${file} (${id}) must not read MIRROR_TOKEN`);
+        assert.equal(asMap(job, id).environment, RELEASE_ENVIRONMENT, `${id} must run in the "${RELEASE_ENVIRONMENT}" environment`);
+      }
+    }
+    assert.ok(readers > 0, 'the release workflow reads MIRROR_TOKEN');
+  });
+
+  test('CI and release check the gallery', () => {
+    for (const file of ['.github/workflows/ci.yml', '.github/workflows/release.yml']) {
+      assert.match(read(file), /run: node scripts\/gallery\.ts --check/, file);
+    }
   });
 
   test('pages deploys with the official actions', () => {

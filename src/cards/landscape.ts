@@ -1,7 +1,7 @@
-import { levelScale, yearWindow, type CalendarCell, type Level } from '../core/calendar.ts';
-import { WEEKDAYS, monthYear, plural, shortDate } from '../core/format.ts';
+import { lastYear, levelScale, monthStarts, parseDate, yearTotal, yearWindow, type CalendarCell, type Level } from '../core/calendar.ts';
+import { MONTHS, WEEKDAYS, monthYear, plural, shortDate } from '../core/format.ts';
 import { readOptions } from '../core/options.ts';
-import { esc, fit, label, linearGradient, mix, n, shade, shell, textWidth, tint } from '../core/svg.ts';
+import { esc, fit, fitLabel, label, labelWidth, linearGradient, mix, n, shade, shell, textWidth, tint } from '../core/svg.ts';
 import { contribRamp } from '../core/themes.ts';
 import type { CardDefinition, CardImage, OptionDoc, Palette, RenderContext } from '../core/types.ts';
 
@@ -28,7 +28,8 @@ const CLEARANCE = 24;
 const COL_W = 200;
 const INS_X = W - PAD - 2 * COL_W;
 const ROW_H = 84;
-const TOP = 52;
+/** Header label baseline, shared by every full-width card. */
+const TOP = 56;
 
 const SCALES = ['sqrt', 'linear', 'log'] as const;
 type Scale = (typeof SCALES)[number];
@@ -58,7 +59,8 @@ function share(part: number, whole: number): string {
 }
 
 interface Summary {
-  cells: CalendarCell[];
+  /** Days covered by the summary. */
+  days: number;
   total: number;
   peak: number;
   best: CalendarCell | null;
@@ -67,8 +69,10 @@ interface Summary {
   month: { key: string; total: number };
 }
 
-function summarize(raw: CalendarCell[]): Summary {
-  const cells = raw.map((c) => ({ ...c, count: Number.isFinite(c.count) && c.count > 0 ? Math.round(c.count) : 0 }));
+const sanitize = (raw: CalendarCell[]): CalendarCell[] =>
+  raw.map((c) => ({ ...c, count: Number.isFinite(c.count) && c.count > 0 ? Math.round(c.count) : 0 }));
+
+function summarize(cells: CalendarCell[]): Summary {
   let total = 0;
   let active = 0;
   let best: CalendarCell | null = null;
@@ -88,7 +92,7 @@ function summarize(raw: CalendarCell[]): Summary {
   });
   const month = { key: '', total: -1 };
   for (const [key, t] of byMonth) if (t > month.total) Object.assign(month, { key, total: t });
-  return { cells, total, peak: best?.count ?? 0, best, active, weekday, month };
+  return { days: cells.length, total, peak: best?.count ?? 0, best, active, weekday, month };
 }
 
 function heightFn(scale: Scale, peak: number, maxH: number): (count: number) => number {
@@ -142,10 +146,20 @@ function renderLandscape(ctx: RenderContext): CardImage {
   const spanPhrase = weeks >= 52 ? 'in the last year' : `in the last ${weeks} weeks`;
   const titleText = o.string('title', 'Contribution landscape');
 
-  const sum = summarize(yearWindow(ctx.data.calendar, ctx.now, weeks));
-  const { cells, total, peak, best } = sum;
-  const empty = total === 0;
-  const height = heightFn(scale, peak, maxH);
+  // The landscape draws whole weeks (365 to 371 days), but a full-year card
+  // states GitHub's "last year", like the stats card: the total and insights
+  // cover lastYear() exactly, whatever the weekday.
+  const cells = sanitize(yearWindow(ctx.data.calendar, ctx.now, weeks));
+  const fullYear = weeks >= 52;
+  const counted = fullYear
+    ? sanitize(lastYear(ctx.data.calendar, ctx.now).map((d) => ({ ...d, week: 0, day: parseDate(d.date).getUTCDay() })))
+    : cells;
+  const sum = summarize(counted);
+  const total = fullYear ? yearTotal(ctx.data, ctx.now) : sum.total;
+  const { peak, best } = sum;
+  const peakAll = Math.max(0, ...cells.map((c) => c.count));
+  const empty = peakAll === 0;
+  const height = heightFn(scale, peakAll, maxH);
   const level = levelScale(cells.map((c) => c.count));
   const colours = levelColours(p, dark);
 
@@ -173,10 +187,9 @@ function renderLandscape(ctx: RenderContext): CardImage {
   const headlineValue = fmt(total);
   const headlineRest = `${plural(total, 'contribution')} ${spanPhrase}`;
   const headlineW = textWidth(headlineValue, 36, { weight: 800 }) + 12 + textWidth(headlineRest, 16);
-  const labelMaxChars = Math.floor((INS_X - PAD - 40) / 8.6);
-  const labelText = titleText.length > labelMaxChars ? `${titleText.slice(0, labelMaxChars - 1).trimEnd()}…` : titleText;
+  const labelText = fitLabel(titleText, INS_X - PAD - 40);
   if (!hideTitle) {
-    reserved.push({ x0: PAD, y0: PAD - 8, x1: PAD + Math.max(headlineW, labelText.length * 8.6), y1: 106 });
+    reserved.push({ x0: PAD, y0: PAD - 8, x1: PAD + Math.max(headlineW, labelWidth(labelText)), y1: TOP + 54 });
   }
   const insightsBlock = !empty && showInsights;
   const emptyBlock = empty;
@@ -206,25 +219,18 @@ function renderLandscape(ctx: RenderContext): CardImage {
   };
 
   // ── Month labels (along the front edge, below the slab) ─────────────────
-  const monthLabels: { x: number; y: number; text: string }[] = [];
-  let prevMonth = '';
-  for (const c of cells) {
-    if (c.day !== 0) continue;
-    const m = c.date.slice(5, 7);
-    if (m !== prevMonth) {
-      if (prevMonth) {
-        const [x, y] = P(c.week + 0.5, 7 + RIM);
-        monthLabels.push({ x, y: y + SLAB + 18, text: monthYear(c.date).slice(0, 3) });
-      }
-      prevMonth = m;
-    }
-  }
+  // Same rule as the grid card (shared monthStarts()), so both frame the year alike.
+  const minGap = Math.ceil((textWidth('Mmm', 11, { mono: true }) + 8) / wx);
+  const monthLabels = monthStarts(cells, weeks, minGap).map((m) => {
+    const [x, y] = P(m.week + 0.5, 7 + RIM);
+    return { x, y: y + SLAB + 18, text: MONTHS[m.month] ?? '' };
+  });
 
   // ── Card height ─────────────────────────────────────────────────────────
   const slabBottom = P(weeks + RIM, 7 + RIM)[1] + SLAB;
   let H = slabBottom + 40;
   for (const m of monthLabels) H = Math.max(H, m.y + 26);
-  const legend = legendParts(empty, peak, scale);
+  const legend = legendParts(empty, peakAll, scale);
   const legendRight = PAD + legend.width;
   const frontAt = (x: number) => {
     const w = Math.max(-RIM, Math.min(weeks + RIM, (x - ox - px(0, 7 + RIM)) / wx));
@@ -330,11 +336,11 @@ function renderLandscape(ctx: RenderContext): CardImage {
     [1, 3, 5]
       .map((d) => {
         const [x, y] = P(weeks + RIM, d + 0.5);
-        return `<text x="${n(x + dayLabelGap)}" y="${n(y + 4)}" class="mono" font-size="11" fill="${p.faint}">${(WEEKDAYS[d] ?? '').slice(0, 3)}</text>`;
+        return `<text x="${n(x + dayLabelGap)}" y="${n(y + 4)}" class="mono" font-size="11" fill="${p.muted}">${(WEEKDAYS[d] ?? '').slice(0, 3)}</text>`;
       })
       .join('') +
     monthLabels
-      .map((m) => `<text x="${n(m.x)}" y="${n(m.y)}" text-anchor="middle" class="mono" font-size="11" fill="${p.faint}">${m.text}</text>`)
+      .map((m) => `<text x="${n(m.x)}" y="${n(m.y)}" text-anchor="middle" class="mono" font-size="11" fill="${p.muted}">${m.text}</text>`)
       .join('');
 
   // ── Peak pin ────────────────────────────────────────────────────────────
@@ -393,7 +399,7 @@ function renderLandscape(ctx: RenderContext): CardImage {
       ['Best day', fmt(best.count), shortDate(best.date)],
       ['Busiest month', monthYear(`${sum.month.key}-01`), `${fmt(sum.month.total)} ${plural(sum.month.total, 'contribution')}`],
       ['Favourite weekday', WEEKDAYS[sum.weekday.day] ?? 'Sunday', `${fmt(sum.weekday.total)} ${plural(sum.weekday.total, 'contribution')}`],
-      ['Active days', fmt(sum.active), `of ${fmt(cells.length)} · ${share(sum.active, cells.length)}`],
+      ['Active days', fmt(sum.active), `of ${fmt(sum.days)} · ${share(sum.active, sum.days)}`],
     ];
     side = items
       .map(([name, value, sub], i) => {
@@ -401,7 +407,7 @@ function renderLandscape(ctx: RenderContext): CardImage {
         const y = TOP + Math.floor(i / 2) * ROW_H;
         return (
           `<g class="fade" style="animation-delay:${n(0.25 + i * 0.08, 3)}s">` +
-          `<text x="${x}" y="${y}" class="mono" font-size="11" letter-spacing="1" fill="${p.faint}">${esc(name.toUpperCase())}</text>` +
+          `<text x="${x}" y="${y}" class="mono" font-size="11" letter-spacing="1" fill="${p.muted}">${esc(name.toUpperCase())}</text>` +
           `<text x="${x}" y="${y + 29}" class="sans" font-size="23" font-weight="700" letter-spacing="-.3" fill="${p.text}">${esc(fit(value, COL_W - 16, 23, { weight: 700 }))}</text>` +
           `<text x="${x}" y="${y + 49}" class="mono" font-size="11.5" fill="${p.muted}">${esc(fit(sub, COL_W - 12, 11.5, { mono: true }))}</text></g>`
         );
@@ -410,7 +416,7 @@ function renderLandscape(ctx: RenderContext): CardImage {
   } else if (emptyBlock) {
     side =
       `<g class="fade" style="animation-delay:.25s">` +
-      `<text x="${INS_X}" y="${TOP}" class="mono" font-size="11" letter-spacing="1" fill="${p.faint}">NO ACTIVITY YET</text>` +
+      `<text x="${INS_X}" y="${TOP}" class="mono" font-size="11" letter-spacing="1" fill="${p.muted}">NO ACTIVITY YET</text>` +
       `<text x="${INS_X}" y="${TOP + 30}" class="sans" font-size="23" font-weight="700" letter-spacing="-.3" fill="${p.text}">A blank canvas</text>` +
       `<text x="${INS_X}" y="${TOP + 56}" class="sans" font-size="14" fill="${p.muted}">Every commit, pull request, issue and review</text>` +
       `<text x="${INS_X}" y="${TOP + 76}" class="sans" font-size="14" fill="${p.muted}">raises a bar on this landscape.</text></g>`;
@@ -434,7 +440,7 @@ function renderLandscape(ctx: RenderContext): CardImage {
   const summary = empty
     ? `No contributions ${spanPhrase}.`
     : `${fmt(total)} ${plural(total, 'contribution')} ${spanPhrase}. Best day: ${fmt(peak)} on ${shortDate(best?.date ?? '')}. ` +
-      `Busiest month: ${monthYear(`${sum.month.key}-01`)}. Favourite weekday: ${WEEKDAYS[sum.weekday.day]}. Active on ${sum.active} of ${cells.length} days.`;
+      `Busiest month: ${monthYear(`${sum.month.key}-01`)}. Favourite weekday: ${WEEKDAYS[sum.weekday.day]}. Active on ${sum.active} of ${sum.days} days.`;
   const svg = shell({
     width: W,
     height: H,
@@ -498,9 +504,9 @@ function renderLegend(legend: Legend, y: number, colours: ReturnType<typeof leve
   const notes = legend.notes.map((t) => `<tspan dx="12" fill-opacity=".6">·</tspan><tspan dx="12">${esc(t)}</tspan>`).join('');
   return (
     `<g class="fade" style="animation-delay:.4s">` +
-    `<text x="${PAD}" y="${n(y)}" class="mono" font-size="${LEGEND_SIZE}" fill="${p.faint}">Less</text>` +
+    `<text x="${PAD}" y="${n(y)}" class="mono" font-size="${LEGEND_SIZE}" fill="${p.muted}">Less</text>` +
     cubes +
-    `<text x="${n(moreX)}" y="${n(y)}" class="mono" font-size="${LEGEND_SIZE}" fill="${p.faint}">More${notes}</text></g>`
+    `<text x="${n(moreX)}" y="${n(y)}" class="mono" font-size="${LEGEND_SIZE}" fill="${p.muted}">More${notes}</text></g>`
   );
 }
 

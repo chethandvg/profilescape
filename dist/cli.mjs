@@ -55,12 +55,114 @@ var package_default = {
   }
 };
 
+// src/core/format.ts
+var MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+var WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+function compact(value) {
+  const v = Math.round(value);
+  if (Math.abs(v) >= 1e6) return `${trim(v / 1e6)}M`;
+  if (Math.abs(v) >= 1e4) return `${trim(v / 1e3)}k`;
+  return v.toLocaleString("en-US");
+}
+function trim(x) {
+  return x.toFixed(1).replace(/\.0$/, "");
+}
+var DISPLAY_NAMES = {
+  "jupyter notebook": "Jupyter",
+  "visual basic .net": "VB.NET",
+  "protocol buffer": "Protobuf",
+  batchfile: "Batch",
+  tsql: "T-SQL",
+  plpgsql: "PL/pgSQL"
+};
+function displayName(language) {
+  const name = language.trim();
+  return Object.hasOwn(DISPLAY_NAMES, name.toLowerCase()) ? DISPLAY_NAMES[name.toLowerCase()] : name;
+}
+function plural(count, one, many = `${one}s`) {
+  return count === 1 ? one : many;
+}
+function percent(fraction, digits = 1) {
+  return `${(fraction * 100).toFixed(digits)}%`;
+}
+var valid = (iso) => !!iso && Number.isFinite(Date.parse(iso));
+function parts(iso) {
+  const [y = "1970", m = "1", d = "1"] = iso.slice(0, 10).split("-");
+  return { y: Number(y), m: Number(m), d: Number(d) };
+}
+function shortDate(iso) {
+  if (!valid(iso)) return "";
+  const { y, m, d } = parts(iso);
+  return `${MONTHS[m - 1]} ${d}, ${y}`;
+}
+function monthYear(iso) {
+  if (!valid(iso)) return "";
+  const { y, m } = parts(iso);
+  return `${MONTHS[m - 1]} ${y}`;
+}
+function relativeTime(iso, now) {
+  if (!valid(iso)) return "";
+  const days = Math.floor((now.getTime() - new Date(iso).getTime()) / 864e5);
+  if (days <= 0) return "today";
+  if (days === 1) return "yesterday";
+  if (days < 30) return `${days} days ago`;
+  const months = Math.floor(days / 30.44);
+  if (months < 12) return `${months} ${plural(months, "month")} ago`;
+  const years = Math.floor(days / 365.25);
+  return `${years} ${plural(years, "year")} ago`;
+}
+
+// src/core/options.ts
+function own(table, key) {
+  return Object.hasOwn(table, key) ? table[key] : void 0;
+}
+function readOptions(options) {
+  const src = options ?? {};
+  const get = (key) => Object.hasOwn(src, key) ? src[key] : void 0;
+  return {
+    has: (key) => get(key) !== void 0 && get(key) !== null,
+    raw: get,
+    string(key, fallback) {
+      const v = get(key);
+      return typeof v === "string" && v.trim() !== "" ? v : typeof v === "number" ? String(v) : fallback;
+    },
+    optionalString(key) {
+      const v = get(key);
+      return typeof v === "string" && v.trim() !== "" ? v : void 0;
+    },
+    number(key, fallback, range = {}) {
+      const v = get(key);
+      const num = typeof v === "number" ? v : typeof v === "string" ? Number(v) : Number.NaN;
+      if (!Number.isFinite(num)) return fallback;
+      return Math.min(range.max ?? Number.POSITIVE_INFINITY, Math.max(range.min ?? Number.NEGATIVE_INFINITY, num));
+    },
+    boolean(key, fallback) {
+      const v = get(key);
+      if (typeof v === "boolean") return v;
+      if (typeof v === "string") return ["true", "yes", "1", "on"].includes(v.trim().toLowerCase());
+      return fallback;
+    },
+    /** Accepts an array or a comma/newline separated string. */
+    list(key, fallback) {
+      const v = get(key);
+      if (Array.isArray(v)) return v.map(String).map((s) => s.trim()).filter(Boolean);
+      if (typeof v === "string") return v.split(/[,\n]/).map((s) => s.trim()).filter(Boolean);
+      return fallback;
+    },
+    oneOf(key, allowed, fallback) {
+      const v = get(key);
+      return typeof v === "string" && allowed.includes(v) ? v : fallback;
+    }
+  };
+}
+
 // src/core/svg.ts
 var SANS = "-apple-system,BlinkMacSystemFont,'Segoe UI','Inter',Helvetica,Arial,sans-serif";
 var MONO = "ui-monospace,SFMono-Regular,'JetBrains Mono','Cascadia Code',Consolas,Menlo,monospace";
 var REDUCED_MOTION = "@media (prefers-reduced-motion: reduce){*{animation:none!important;transition:none!important}}";
+var XML_INVALID = /[\u0000-\u0008\u000B\u000C\u000E-\u001F￾￿]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
 function esc(value) {
-  return String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  return String(value).replace(XML_INVALID, "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 function n(value, digits = 1) {
   const f = 10 ** digits;
@@ -69,41 +171,78 @@ function n(value, digits = 1) {
 var NARROW = new Set("iljtfr.,:;'|!I ");
 var WIDE = new Set("mwMW@");
 function textWidth(s, size, opts = {}) {
-  const chars2 = [...s];
-  if (opts.mono) return chars2.length * size * 0.6;
+  const chars = [...s];
+  if (opts.mono) return chars.length * size * 0.6;
   let narrow = 0;
   let wide = 0;
-  for (const ch of chars2) {
+  for (const ch of chars) {
     if (NARROW.has(ch)) narrow++;
     else if (WIDE.has(ch)) wide++;
   }
   const factor = (opts.weight ?? 400) < 600 ? 0.53 : 0.57;
-  return (chars2.length - narrow * 0.45 + wide * 0.35) * size * factor;
+  return (chars.length - narrow * 0.45 + wide * 0.35) * size * factor;
 }
-function wrap(s, maxChars, maxLines) {
+var TRAILING_SEPARATORS = /[\s.,;:!?·|/-]+$/;
+function fit(s, maxWidth, size, opts = {}) {
+  if (textWidth(s, size, opts) <= maxWidth) return s;
+  const chars = [...s];
+  while (chars.length > 1 && textWidth(`${chars.join("")}\u2026`, size, opts) > maxWidth) chars.pop();
+  const kept = chars.join("");
+  return `${kept.replace(TRAILING_SEPARATORS, "") || kept.trimEnd()}\u2026`;
+}
+function wrapPx(text, maxWidth, size, opts = {}, maxLines = Number.POSITIVE_INFINITY) {
+  const w = (s) => textWidth(s, size, opts);
+  const words2 = [];
+  for (const word of text.split(/\s+/).filter(Boolean)) {
+    if (w(word) <= maxWidth) {
+      words2.push(word);
+      continue;
+    }
+    let rest = [...word];
+    while (rest.length) {
+      let cut = rest.length;
+      while (cut > 1 && w(rest.slice(0, cut).join("")) > maxWidth) cut--;
+      words2.push(rest.slice(0, cut).join(""));
+      rest = rest.slice(cut);
+    }
+  }
   const lines = [];
   let cur = "";
-  for (const word of s.split(/\s+/).filter(Boolean)) {
-    if (!cur) cur = word;
-    else if (cur.length + 1 + word.length <= maxChars) cur += ` ${word}`;
+  for (const word of words2) {
+    const next = cur ? `${cur} ${word}` : word;
+    if (!cur || w(next) <= maxWidth) cur = next;
     else {
       lines.push(cur);
       cur = word;
+      if (lines.length > maxLines) break;
     }
   }
-  if (cur) lines.push(cur);
-  if (lines.length > maxLines) {
-    const kept = lines.slice(0, maxLines);
-    kept[maxLines - 1] = `${(kept[maxLines - 1] ?? "").replace(/[.,;:]+$/, "")}\u2026`;
-    return kept;
+  if (cur && lines.length <= maxLines) lines.push(cur);
+  if (lines.length <= maxLines) return lines;
+  const kept = lines.slice(0, maxLines);
+  const trail = TRAILING_SEPARATORS;
+  let last = (kept[maxLines - 1] ?? "").replace(trail, "");
+  while (last && w(`${last}\u2026`) > maxWidth) {
+    const sp = last.lastIndexOf(" ");
+    last = (sp > 0 ? last.slice(0, sp) : [...last].slice(0, -1).join("")).replace(trail, "");
   }
-  return lines;
+  kept[maxLines - 1] = `${last}\u2026`;
+  return kept;
 }
-function fit(s, maxWidth, size, opts = {}) {
-  if (textWidth(s, size, opts) <= maxWidth) return s;
-  let out2 = s;
-  while (out2.length > 1 && textWidth(`${out2}\u2026`, size, opts) > maxWidth) out2 = out2.slice(0, -1);
-  return `${out2.trimEnd()}\u2026`;
+function labelWidth(text, m = {}) {
+  return [...text].length * ((m.size ?? 12) * 0.6 + (m.spacing ?? 1.4));
+}
+function fitLabel(text, maxWidth, m = {}) {
+  if (labelWidth(text, m) <= maxWidth) return text;
+  const chars = [...text];
+  while (chars.length > 1 && labelWidth(`${chars.join("")}\u2026`, m) > maxWidth) chars.pop();
+  return `${chars.join("").trimEnd()}\u2026`;
+}
+var HEX_COLOR = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
+function safeColor(value, fallback) {
+  if (typeof value !== "string") return fallback;
+  const v = value.trim();
+  return HEX_COLOR.test(v) ? v : fallback;
 }
 function rgb(hex2) {
   let h = hex2.replace("#", "").trim();
@@ -135,14 +274,68 @@ function contrast(a, b) {
   const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
   return (hi + 0.05) / (lo + 0.05);
 }
+function lab(c) {
+  const lin = (v) => {
+    const s = v / 255;
+    return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+  };
+  const [r, g, b] = rgb(c).map(lin);
+  const f = (t) => t > 216 / 24389 ? Math.cbrt(t) : t * 24389 / 27 / 116 + 16 / 116;
+  const x = f((0.4124 * r + 0.3576 * g + 0.1805 * b) / 0.95047);
+  const y = f(0.2126 * r + 0.7152 * g + 0.0722 * b);
+  const z = f((0.0193 * r + 0.1192 * g + 0.9505 * b) / 1.08883);
+  return [116 * y - 16, 500 * (x - y), 200 * (y - z)];
+}
+var lightness = (c) => lab(c)[0];
+function deltaE(a, b) {
+  const [p, q] = [lab(a), lab(b)];
+  return Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]);
+}
+function toHsl([r, g, b]) {
+  const [R, G, B] = [r / 255, g / 255, b / 255];
+  const max = Math.max(R, G, B);
+  const min = Math.min(R, G, B);
+  const l = (max + min) / 2;
+  const d = max - min;
+  if (d === 0) return [0, 0, l];
+  const s = d / (1 - Math.abs(2 * l - 1));
+  const h = max === R ? ((G - B) / d + (G < B ? 6 : 0)) / 6 : max === G ? ((B - R) / d + 2) / 6 : ((R - G) / d + 4) / 6;
+  return [h, s, l];
+}
+function fromHsl(h, s, l) {
+  const a = s * Math.min(l, 1 - l);
+  const f = (offset) => {
+    const k = (offset + h * 12) % 12;
+    return (l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1))) * 255;
+  };
+  return hex(f(0), f(8), f(4));
+}
+function ensureContrast(color, background, min = 1.8, ink) {
+  const lighter = ink ? luminance(ink) >= luminance(background) : contrast("#FFFFFF", background) >= contrast("#000000", background);
+  const extreme = lighter ? "#FFFFFF" : "#000000";
+  if (!HEX_COLOR.test(color.trim())) return ink ?? extreme;
+  if (contrast(color, background) >= min) return color;
+  const [h, s, l] = toHsl(rgb(color));
+  const target = lighter ? 1 : 0;
+  const steps = 40;
+  for (let i = 1; i <= steps; i++) {
+    const out2 = fromHsl(h, s, l + (target - l) * i / steps);
+    if (contrast(out2, background) >= min) return out2;
+  }
+  return ink ?? extreme;
+}
 function linearGradient(id, from, to, vertical = false) {
   const [x2, y2] = vertical ? ["0", "1"] : ["1", "0"];
   return `<linearGradient id="${id}" x1="0" y1="0" x2="${x2}" y2="${y2}"><stop offset="0" stop-color="${from}"/><stop offset="1" stop-color="${to}"/></linearGradient>`;
 }
 var delay = (seconds) => `style="animation-delay:${n(seconds, 3)}s"`;
+var LABEL_CONTRAST = 4.5;
+function labelColor(p) {
+  return ensureContrast(p.accentB, p.panel, LABEL_CONTRAST, p.text);
+}
 function label(x, y, text, p, opts = {}) {
   const anchor = opts.anchor === "end" ? ' text-anchor="end"' : "";
-  return `<text x="${n(x)}" y="${n(y)}"${anchor} class="mono" font-size="12" letter-spacing="1.4" fill="${opts.color ?? p.accentB}">${esc(text.toUpperCase())}</text>`;
+  return `<text x="${n(x)}" y="${n(y)}"${anchor} class="mono" font-size="12" letter-spacing="1.4" fill="${opts.color ?? labelColor(p)}">${esc(text.toUpperCase())}</text>`;
 }
 function shell(o) {
   const { width: W5, height: H3, palette: p } = o;
@@ -252,7 +445,7 @@ var PRESETS = [
       border: "#C4C8DA",
       text: "#283A73",
       muted: "#4E5B8D",
-      faint: "#7880A8",
+      faint: "#767EA7",
       accentA: "#2E7DE9",
       accentB: "#9854F1",
       success: "#587539",
@@ -309,7 +502,7 @@ var PRESETS = [
       border: "#E2DDCB",
       text: "#1F1F1F",
       muted: "#635D97",
-      faint: "#948FB5",
+      faint: "#918CB3",
       accentA: "#644AC9",
       accentB: "#A3144D",
       success: "#14710A",
@@ -423,7 +616,7 @@ var PRESETS = [
       border: "#CCD0DA",
       text: "#4C4F69",
       muted: "#5C5F77",
-      faint: "#8C8FA1",
+      faint: "#86899C",
       accentA: "#8839EF",
       accentB: "#E64553",
       success: "#40A02B",
@@ -511,7 +704,7 @@ var PRESETS = [
       border: "#124452",
       text: "#EEE8D5",
       muted: "#93A1A1",
-      faint: "#586E75",
+      faint: "#5D757C",
       accentA: "#268BD2",
       accentB: "#2AA198",
       success: "#859900",
@@ -537,7 +730,7 @@ var PRESETS = [
       border: "#E4DDC8",
       text: "#073642",
       muted: "#586E75",
-      faint: "#93A1A1",
+      faint: "#809090",
       accentA: "#268BD2",
       accentB: "#22867F",
       success: "#738500",
@@ -594,7 +787,7 @@ var PRESETS = [
       border: "#DFDAD9",
       text: "#464261",
       muted: "#6E6A86",
-      faint: "#9893A5",
+      faint: "#938EA1",
       accentA: "#907AA9",
       accentB: "#B4637A",
       success: "#286983",
@@ -651,7 +844,7 @@ var PRESETS = [
       border: "#DBDBDC",
       text: "#383A42",
       muted: "#696C77",
-      faint: "#A0A1A7",
+      faint: "#8E8F96",
       accentA: "#4078F2",
       accentB: "#50A14F",
       success: "#50A14F",
@@ -765,7 +958,7 @@ var PRESETS = [
       border: "#D5CEA3",
       text: "#43436C",
       muted: "#545464",
-      faint: "#8A8980",
+      faint: "#87867D",
       accentA: "#4D699B",
       accentB: "#B35B79",
       success: "#6F894E",
@@ -879,7 +1072,7 @@ var PRESETS = [
       border: "#F3DED4",
       text: "#2B1A1E",
       muted: "#6F5458",
-      faint: "#A88F8C",
+      faint: "#A68C89",
       accentA: "#E04E3C",
       accentB: "#D06E00",
       success: "#2F8A4C",
@@ -912,7 +1105,7 @@ var aurora = {
     border: "#232838",
     text: "#E6E8F0",
     muted: "#8B93A7",
-    faint: "#5A6178",
+    faint: "#5C637A",
     accentA: "#8B7CFF",
     accentB: "#3EC6E0",
     success: "#3FB950",
@@ -968,7 +1161,7 @@ function themeList() {
 }
 function getTheme(id) {
   const key = (id ?? DEFAULT_THEME).trim().toLowerCase();
-  return THEMES[key] ?? THEMES[DEFAULT_THEME];
+  return Object.hasOwn(THEMES, key) ? THEMES[key] : THEMES[DEFAULT_THEME];
 }
 function applyOverrides(base, ...overrides) {
   let out2 = { ...base, syntax: { ...base.syntax } };
@@ -979,657 +1172,47 @@ function applyOverrides(base, ...overrides) {
   }
   return out2;
 }
+var RAMP_STEP = 7;
 function contribRamp(p, mode) {
-  const peak = mode === "dark" ? mix(p.accentB, "#FFFFFF", 0.35) : shade(p.accentB, 0.15);
-  return [p.empty, mix(p.empty, p.accentA, 0.45), p.accentA, mix(p.accentA, p.accentB, 0.6), peak];
-}
-
-// src/core/types.ts
-var CARD_IDS = ["stats", "languages", "3d", "grid", "repos", "hero", "stack", "socials"];
-
-// src/action/config.ts
-var ACTION_INPUT_DEFAULTS = {
-  username: "",
-  token: "",
-  cards: "stats,3d,languages,repos",
-  theme: "aurora",
-  modes: "dark,light",
-  animate: "true",
-  history: "full",
-  hide_languages: "",
-  exclude_repos: "",
-  include_private: "true",
-  repos: "",
-  config: "",
-  output_dir: "profilescape",
-  publish: "branch",
-  branch: "profilescape-output",
-  commit_message: "chore: update profilescape cards",
-  readme: "",
-  github_token: ""
-};
-var INPUT_NAMES = Object.keys(ACTION_INPUT_DEFAULTS);
-var DEFAULT_CARDS = ["stats", "3d", "languages", "repos"];
-var ConfigError = class extends Error {
-  constructor(message) {
-    super(message);
-    this.name = "ConfigError";
+  const dark = mode === "dark";
+  const peak = dark ? mix(p.accentB, "#FFFFFF", 0.35) : shade(p.accentB, 0.15);
+  const ramp = [
+    p.empty,
+    mix(p.empty, p.accentA, 0.45),
+    p.accentA,
+    mix(p.accentA, p.accentB, 0.6),
+    peak
+  ];
+  const toward = dark ? "#FFFFFF" : "#000000";
+  const rise = (a, b) => dark ? lightness(b) - lightness(a) : lightness(a) - lightness(b);
+  for (let i = 1; i < ramp.length; i++) {
+    const prev = ramp[i - 1];
+    const base = ramp[i];
+    let c = base;
+    const distinct = (x) => rise(prev, x) >= RAMP_STEP && deltaE(prev, x) >= 10;
+    for (let s = 1; s <= 40 && !distinct(c); s++) c = mix(base, toward, s / 40);
+    ramp[i] = c;
   }
-};
-var CARD_ALIASES = {
-  landscape: "3d",
-  "3d-graph": "3d",
-  contributions: "3d",
-  stat: "stats",
-  overview: "stats",
-  language: "languages",
-  langs: "languages",
-  "top-languages": "languages",
-  repo: "repos",
-  repositories: "repos",
-  projects: "repos",
-  banner: "hero",
-  header: "hero",
-  tech: "stack",
-  "tech-stack": "stack",
-  techstack: "stack",
-  social: "socials",
-  badges: "socials",
-  "contribution-grid": "grid",
-  heatmap: "grid",
-  snake: "grid"
-};
-var CONFIG_KEYS = [
-  "$schema",
-  "theme",
-  "colors",
-  "darkColors",
-  "lightColors",
-  "cards",
-  "modes",
-  "animate",
-  "history",
-  "hideLanguages",
-  "excludeRepos",
-  "includePrivate",
-  "repos",
-  "options"
-];
-var LOGIN_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
-var HEX_RE = /^#?(?:[0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
-function splitList(value) {
-  return value.split(/[,\n]/).map((s) => s.trim()).filter(Boolean);
+  return ramp;
 }
-function editDistance(a, b) {
-  const d = Array.from({ length: a.length + 1 }, (_, i) => Array.from({ length: b.length + 1 }, (_2, j) => i === 0 ? j : j === 0 ? i : 0));
-  const at3 = (i, j) => d[i][j];
-  for (let i = 1; i <= a.length; i++) {
-    for (let j = 1; j <= b.length; j++) {
-      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-      let v = Math.min(at3(i - 1, j) + 1, at3(i, j - 1) + 1, at3(i - 1, j - 1) + cost);
-      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) v = Math.min(v, at3(i - 2, j - 2) + 1);
-      d[i][j] = v;
-    }
-  }
-  return at3(a.length, b.length);
-}
-function suggest(input, candidates) {
-  const needle = input.toLowerCase();
-  let best;
+function otherColor(p, used) {
+  const candidates = [p.faint, mix(p.faint, p.text, 0.45), mix(p.faint, p.panel, 0.45), p.muted];
+  let best = p.faint;
+  let bestScore = -1;
   for (const c of candidates) {
-    const d = editDistance(needle, c.toLowerCase());
-    if (d <= Math.max(1, Math.floor(c.length / 3)) && (!best || d < best.d)) best = { c, d };
-  }
-  return best?.c;
-}
-var hint = (input, candidates) => {
-  const s = suggest(input, candidates);
-  return s ? ` (did you mean "${s}"?)` : "";
-};
-function parseBool(value, field) {
-  if (typeof value === "boolean") return value;
-  const v = String(value).trim().toLowerCase();
-  if (["true", "yes", "y", "on", "1"].includes(v)) return true;
-  if (["false", "no", "n", "off", "0"].includes(v)) return false;
-  throw new ConfigError(`${field} must be true or false, got "${String(value)}".`);
-}
-function toList(value, field) {
-  if (Array.isArray(value)) {
-    return value.map((v) => {
-      if (typeof v !== "string" && typeof v !== "number") throw new ConfigError(`${field} must be a list of strings.`);
-      return String(v).trim();
-    }).filter(Boolean);
-  }
-  if (typeof value === "string") return splitList(value);
-  throw new ConfigError(`${field} must be a list (array or comma-separated string).`);
-}
-var isObject = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
-var camel = (key) => key.replace(/[-_]+([a-z0-9])/gi, (_, c) => c.toUpperCase());
-function stripJsonc(text) {
-  let out2 = "";
-  let inString = false;
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    if (inString) {
-      out2 += ch;
-      if (ch === "\\") out2 += text[++i] ?? "";
-      else if (ch === '"') inString = false;
-      continue;
-    }
-    if (ch === '"') {
-      inString = true;
-      out2 += ch;
-    } else if (ch === "/" && text[i + 1] === "/") {
-      while (i < text.length && text[i] !== "\n" && text[i] !== "\r") {
-        out2 += " ";
-        i++;
-      }
-      i--;
-    } else if (ch === "/" && text[i + 1] === "*") {
-      const end = text.indexOf("*/", i + 2);
-      const stop = end === -1 ? text.length : end + 2;
-      for (; i < stop; i++) out2 += text[i] === "\n" || text[i] === "\r" ? text[i] : " ";
-      i--;
-    } else {
-      out2 += ch;
+    if (contrast(c, p.panel) < 1.3) continue;
+    const score = Math.min(Number.POSITIVE_INFINITY, ...used.map((u) => deltaE(c, u)));
+    if (score >= 12) return c;
+    if (score > bestScore) {
+      best = c;
+      bestScore = score;
     }
   }
-  let result = "";
-  inString = false;
-  for (let i = 0; i < out2.length; i++) {
-    const ch = out2[i];
-    if (inString) {
-      result += ch;
-      if (ch === "\\") result += out2[++i] ?? "";
-      else if (ch === '"') inString = false;
-      continue;
-    }
-    if (ch === '"') inString = true;
-    if (ch === ",") {
-      let j = i + 1;
-      while (j < out2.length && /\s/.test(out2[j])) j++;
-      if (out2[j] === "}" || out2[j] === "]") {
-        result += " ";
-        continue;
-      }
-    }
-    result += ch;
-  }
-  return result;
-}
-function findJsonError(text) {
-  let i = 0;
-  function fail(reason) {
-    throw { pos: i, reason };
-  }
-  function ws() {
-    while (i < text.length && /\s/.test(text[i])) i++;
-  }
-  function str() {
-    i++;
-    while (i < text.length) {
-      const c = text[i];
-      if (c === '"') {
-        i++;
-        return;
-      }
-      if (c === "\\") i += 2;
-      else if (c < " ") fail("Line breaks are not allowed inside strings");
-      else i++;
-    }
-    fail("Unterminated string");
-  }
-  function value() {
-    ws();
-    const ch = text[i];
-    if (ch === void 0) fail("Unexpected end of JSON (is a closing bracket missing?)");
-    if (ch === "{") {
-      i++;
-      ws();
-      if (text[i] === "}") {
-        i++;
-        return;
-      }
-      for (; ; ) {
-        ws();
-        if (text[i] !== '"') fail("Expected a property name in double quotes");
-        str();
-        ws();
-        if (text[i] !== ":") fail('Expected ":" after the property name');
-        i++;
-        value();
-        const end = i;
-        ws();
-        if (text[i] === ",") i++;
-        else if (text[i] === "}") {
-          i++;
-          return;
-        } else {
-          i = end;
-          fail('Expected "," or "}" after this value (is a comma missing?)');
-        }
-      }
-    }
-    if (ch === "[") {
-      i++;
-      ws();
-      if (text[i] === "]") {
-        i++;
-        return;
-      }
-      for (; ; ) {
-        value();
-        const end = i;
-        ws();
-        if (text[i] === ",") i++;
-        else if (text[i] === "]") {
-          i++;
-          return;
-        } else {
-          i = end;
-          fail('Expected "," or "]" after this list item (is a comma missing?)');
-        }
-      }
-    }
-    if (ch === '"') return str();
-    const num = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/.exec(text.slice(i));
-    if (num) {
-      i += num[0].length;
-      return;
-    }
-    for (const lit of ["true", "false", "null"]) {
-      if (text.startsWith(lit, i)) {
-        i += lit.length;
-        return;
-      }
-    }
-    if (ch === "'") fail("Strings must use double quotes");
-    if (/[A-Za-z_]/.test(ch)) fail('Unexpected text; strings must be in double quotes, e.g. "stats"');
-    fail(`Unexpected character ${JSON.stringify(ch)}`);
-  }
-  try {
-    value();
-    ws();
-    if (i < text.length) fail("Unexpected content after the end of the JSON object");
-    return null;
-  } catch (e) {
-    if (typeof e === "object" && e !== null && "pos" in e) return e;
-    throw e;
-  }
-}
-function parseConfigJson(text, source = "config") {
-  const original = text.replace(/^\uFEFF/, "");
-  const clean2 = stripJsonc(original);
-  if (!clean2.trim()) return {};
-  try {
-    return JSON.parse(clean2);
-  } catch (err2) {
-    const fault = findJsonError(clean2);
-    if (!fault) throw new ConfigError(`Invalid JSON in ${source}: ${err2.message}`);
-    const before = clean2.slice(0, fault.pos);
-    const line = before.split("\n").length;
-    const col = fault.pos - before.lastIndexOf("\n");
-    const srcLine = (original.split("\n")[line - 1] ?? "").replace(/\r$/, "").replace(/\t/g, " ");
-    const gutter = String(line);
-    const frame = `
-  ${gutter} | ${srcLine.slice(0, 120)}
-  ${" ".repeat(gutter.length)} | ${" ".repeat(Math.max(0, Math.min(col - 1, 120)))}^`;
-    throw new ConfigError(`Invalid JSON in ${source} at line ${line}, column ${col}: ${fault.reason}${frame}`);
-  }
-}
-function normalizeCards(list, field) {
-  const valid = CARD_IDS;
-  const out2 = [];
-  const unknown = [];
-  for (const raw of list) {
-    const key = raw.trim().toLowerCase();
-    if (key === "all") {
-      for (const id2 of CARD_IDS) if (!out2.includes(id2)) out2.push(id2);
-      continue;
-    }
-    const id = valid.includes(key) ? key : CARD_ALIASES[key];
-    if (!id) unknown.push(raw);
-    else if (!out2.includes(id)) out2.push(id);
-  }
-  if (unknown.length) {
-    const details = unknown.map((u) => `"${u}"${hint(u, valid)}`).join(", ");
-    throw new ConfigError(`Unknown card${unknown.length > 1 ? "s" : ""} in ${field}: ${details}. Valid cards: ${CARD_IDS.join(", ")} (or "all").`);
-  }
-  if (!out2.length) throw new ConfigError(`${field} must list at least one card. Valid cards: ${CARD_IDS.join(", ")}.`);
-  return out2;
-}
-function normalizeModes(list, field) {
-  const out2 = [];
-  for (const raw of list) {
-    const key = raw.trim().toLowerCase();
-    const modes = key === "dark" || key === "light" ? [key] : key === "both" || key === "auto" ? ["dark", "light"] : void 0;
-    if (!modes) throw new ConfigError(`Unknown mode "${raw}" in ${field}. Use "dark", "light" or "dark,light".`);
-    for (const m of modes) if (!out2.includes(m)) out2.push(m);
-  }
-  if (!out2.length) throw new ConfigError(`${field} must contain "dark", "light" or both.`);
-  return out2;
-}
-function normalizeHistory(value, field) {
-  const v = value.trim().toLowerCase();
-  if (v === "full" || v === "all") return "full";
-  if (v === "year" || v === "1y") return "year";
-  throw new ConfigError(`${field} must be "full" or "year", got "${value}".`);
-}
-function normalizeTheme(value, field, warnings) {
-  const id = value.trim().toLowerCase();
-  const ids = themeIds();
-  if (ids.includes(id)) return id;
-  warnings.push(`Unknown theme "${value}" in ${field}${hint(id, ids)}; using "${DEFAULT_THEME}". Available themes: ${ids.join(", ")}.`);
-  return DEFAULT_THEME;
-}
-function paletteKeys() {
-  const base = getTheme(DEFAULT_THEME).dark;
-  const colors = [];
-  const numbers = [];
-  for (const [k, v] of Object.entries(base)) {
-    if (typeof v === "string") colors.push(k);
-    else if (typeof v === "number") numbers.push(k);
-  }
-  return { colors, numbers, syntax: Object.keys(base.syntax) };
-}
-function normalizeColor(value, field) {
-  if (typeof value !== "string" || !HEX_RE.test(value.trim())) {
-    throw new ConfigError(`${field} must be a hex colour like "#8B7CFF", got ${JSON.stringify(value)}.`);
-  }
-  const v = value.trim();
-  return v.startsWith("#") ? v : `#${v}`;
-}
-function normalizePalette(value, field, warnings) {
-  if (value === void 0 || value === null) return {};
-  if (!isObject(value)) throw new ConfigError(`${field} must be an object of colours, e.g. { "accentA": "#FF7A59" }.`);
-  const keys = paletteKeys();
-  const all = [...keys.colors, ...keys.numbers, "syntax"];
-  const out2 = {};
-  for (const [k, v] of Object.entries(value)) {
-    if (keys.colors.includes(k)) out2[k] = normalizeColor(v, `${field}.${k}`);
-    else if (keys.numbers.includes(k)) {
-      const num = typeof v === "number" ? v : typeof v === "string" ? Number(v) : Number.NaN;
-      if (!Number.isFinite(num) || num < 0 || num > 1) throw new ConfigError(`${field}.${k} must be a number between 0 and 1.`);
-      out2[k] = num;
-    } else if (k === "syntax") {
-      if (!isObject(v)) throw new ConfigError(`${field}.syntax must be an object of colours.`);
-      const syntax = {};
-      for (const [sk, sv] of Object.entries(v)) {
-        if (keys.syntax.includes(sk)) syntax[sk] = normalizeColor(sv, `${field}.syntax.${sk}`);
-        else warnings.push(`Ignoring unknown colour "${field}.syntax.${sk}"${hint(sk, keys.syntax)}.`);
-      }
-      out2.syntax = syntax;
-    } else {
-      warnings.push(`Ignoring unknown colour "${field}.${k}"${hint(k, all)}. Known colours: ${all.join(", ")}.`);
-    }
-  }
-  return out2;
-}
-function normalizeOptions(value, warnings) {
-  if (value === void 0 || value === null) return {};
-  if (!isObject(value)) throw new ConfigError('options must be an object keyed by card id, e.g. { "repos": { "layout": "detail" } }.');
-  const out2 = {};
-  for (const [k, v] of Object.entries(value)) {
-    const key = k.trim().toLowerCase();
-    const id = CARD_IDS.includes(key) ? key : CARD_ALIASES[key];
-    if (!id) {
-      warnings.push(`Ignoring options for unknown card "${k}"${hint(key, CARD_IDS)}. Valid cards: ${CARD_IDS.join(", ")}.`);
-      continue;
-    }
-    if (!isObject(v)) throw new ConfigError(`options.${k} must be an object.`);
-    out2[id] = { ...out2[id] ?? {}, ...v };
-  }
-  return out2;
-}
-function isValidBranchName(name) {
-  return name.length > 0 && name.length <= 200 && !/[\s~^:?*[\\\x00-\x1f\x7f]/.test(name) && !name.includes("..") && !name.includes("@{") && !name.includes("//") && !name.startsWith("/") && !name.endsWith("/") && !name.startsWith("-") && !name.endsWith(".") && !name.endsWith(".lock") && !name.split("/").some((part) => part.startsWith("."));
-}
-function resolveConfig(inputs, json, opts = {}) {
-  const warnings = [];
-  if (json !== void 0 && json !== null && !isObject(json)) {
-    throw new ConfigError('The config must be a JSON object, e.g. { "theme": "aurora", "cards": ["stats", "3d"] }.');
-  }
-  const file = {};
-  for (const [rawKey, value] of Object.entries(json ?? {})) {
-    const key = rawKey === "$schema" ? rawKey : camel(rawKey);
-    if (CONFIG_KEYS.includes(key)) file[key] = value;
-    else if (key === "username" || key === "user" || key === "login") {
-      warnings.push('"username" in the config JSON is ignored; set the username input (Action) or --user (CLI).');
-    } else warnings.push(`Ignoring unknown config key "${rawKey}"${hint(key, CONFIG_KEYS)}.`);
-  }
-  const explicit = (name) => {
-    const v = (inputs[name] ?? "").trim();
-    if (!v) return void 0;
-    if (opts.ignoreDefaultInputs) {
-      const norm2 = (s) => s.replace(/\s+/g, "").toLowerCase();
-      if (norm2(v) === norm2(ACTION_INPUT_DEFAULTS[name])) return void 0;
-    }
-    return v;
-  };
-  const has = (key) => file[key] !== void 0 && file[key] !== null;
-  const sources = {};
-  function pick(key, input, fromInput, fromConfig, fallback) {
-    const v = explicit(input);
-    if (v !== void 0) {
-      sources[key] = "input";
-      return fromInput(v, opts.inputLabel ? opts.inputLabel(input) : `the ${input} input`);
-    }
-    if (has(key)) {
-      sources[key] = "config";
-      return fromConfig(file[key], `config.${key}`);
-    }
-    sources[key] = "default";
-    return fallback;
-  }
-  const cards = pick(
-    "cards",
-    "cards",
-    (v, f) => normalizeCards(splitList(v.replace(/\s+/g, ",")), f),
-    (v, f) => normalizeCards(toList(v, f), f),
-    [...DEFAULT_CARDS]
-  );
-  const theme = pick(
-    "theme",
-    "theme",
-    (v, f) => normalizeTheme(v, f, warnings),
-    (v, f) => {
-      if (typeof v !== "string") throw new ConfigError(`${f} must be a string (a theme id).`);
-      return normalizeTheme(v, f, warnings);
-    },
-    DEFAULT_THEME
-  );
-  const modes = pick(
-    "modes",
-    "modes",
-    (v, f) => normalizeModes(splitList(v.replace(/\s+/g, ",")), f),
-    (v, f) => normalizeModes(toList(v, f), f),
-    ["dark", "light"]
-  );
-  const animate = pick("animate", "animate", parseBool, parseBool, true);
-  const history = pick(
-    "history",
-    "history",
-    normalizeHistory,
-    (v, f) => normalizeHistory(String(v), f),
-    "full"
-  );
-  const hideLanguages = pick("hideLanguages", "hide_languages", (v) => splitList(v), toList, []);
-  const excludeRepos = pick("excludeRepos", "exclude_repos", (v) => splitList(v), toList, []);
-  const includePrivate = pick("includePrivate", "include_private", parseBool, parseBool, true);
-  const repos = pick("repos", "repos", (v) => splitList(v), toList, []);
-  for (const r of repos) {
-    if (!/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$|^[A-Za-z0-9._-]+$/.test(r)) {
-      throw new ConfigError(`Invalid repository "${r}" in repos. Use "name" (your own repo) or "owner/name".`);
-    }
-  }
-  const colors = normalizePalette(file.colors, "colors", warnings);
-  const darkColors = normalizePalette(file.darkColors, "darkColors", warnings);
-  const lightColors = normalizePalette(file.lightColors, "lightColors", warnings);
-  const options = normalizeOptions(file.options, warnings);
-  for (const id of Object.keys(options)) {
-    if (!cards.includes(id)) warnings.push(`options.${id} is set but the "${id}" card is not enabled (cards: ${cards.join(", ")}).`);
-  }
-  const username = ((inputs.username ?? "").trim() || (opts.defaultUsername ?? "").trim()).replace(/^@/, "");
-  if (username && !LOGIN_RE.test(username)) {
-    throw new ConfigError(`"${username}" is not a valid GitHub username.`);
-  }
-  if (!username && (opts.requireUsername ?? true)) {
-    throw new ConfigError("No username: set the username input (it defaults to the repository owner when running in GitHub Actions).");
-  }
-  const token = (inputs.token ?? "").trim();
-  const publishRaw = (inputs.publish ?? "").trim().toLowerCase() || "branch";
-  const publish = ["branch", "true", "yes", "on"].includes(publishRaw) ? "branch" : ["none", "false", "no", "off"].includes(publishRaw) ? "none" : void 0;
-  if (!publish) throw new ConfigError(`publish must be "branch" or "none", got "${inputs.publish}".`);
-  const branch = (inputs.branch ?? "").trim() || ACTION_INPUT_DEFAULTS.branch;
-  if (!isValidBranchName(branch)) throw new ConfigError(`"${branch}" is not a valid branch name.`);
-  const outputDir = (inputs.output_dir ?? "").trim() || ACTION_INPUT_DEFAULTS.output_dir;
-  return {
-    config: { username, cards, theme, colors, darkColors, lightColors, modes, animate, hideLanguages, excludeRepos, includePrivate, repos, options },
-    settings: {
-      token,
-      githubToken: (inputs.github_token ?? "").trim() || token,
-      history,
-      outputDir,
-      publish,
-      branch,
-      commitMessage: (inputs.commit_message ?? "").trim() || ACTION_INPUT_DEFAULTS.commit_message,
-      readme: (inputs.readme ?? "").trim()
-    },
-    warnings,
-    sources
-  };
-}
-
-// src/action/io.ts
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-function loadConfigText(value, workspace) {
-  const v = value.trim();
-  if (!v) return null;
-  if (v.startsWith("{")) return { text: v, source: "config input" };
-  const path = isAbsolute(v) ? v : resolve(workspace, v);
-  if (!existsSync(path)) {
-    throw new Error(
-      `Config file "${v}" was not found (looked in ${path}). Paths are relative to the repository root; make sure the workflow runs actions/checkout before Profilescape, or pass the JSON inline.`
-    );
-  }
-  return { text: readFileSync(path, "utf8"), source: v };
-}
-function formatBytes(bytes) {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
-}
-function writeFiles(outDir, files) {
-  const root = resolve(outDir);
-  mkdirSync(root, { recursive: true });
-  const written = [];
-  for (const f of files) {
-    const target = resolve(join(root, f.path));
-    if (target !== root && !target.startsWith(root.endsWith(sep) ? root : root + sep)) {
-      throw new Error(`Refusing to write "${f.path}" outside ${root}.`);
-    }
-    mkdirSync(dirname(target), { recursive: true });
-    writeFileSync(target, f.content, "utf8");
-    written.push(target);
-  }
-  return written;
-}
-
-// src/action/readme.ts
-var START_MARKER = "<!-- profilescape:start -->";
-var END_MARKER = "<!-- profilescape:end -->";
-function wrapWithMarkers(markup, eol = "\n") {
-  const body = markup.replace(/\r\n?/g, "\n").trim();
-  const lines = body ? [START_MARKER, "", body, "", END_MARKER] : [START_MARKER, END_MARKER];
-  return lines.join("\n").split("\n").join(eol);
-}
-
-// src/core/format.ts
-var MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-var WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-function compact(value) {
-  const v = Math.round(value);
-  if (Math.abs(v) >= 1e6) return `${trim(v / 1e6)}M`;
-  if (Math.abs(v) >= 1e4) return `${trim(v / 1e3)}k`;
-  return v.toLocaleString("en-US");
-}
-function trim(x) {
-  return x.toFixed(1).replace(/\.0$/, "");
-}
-function plural(count, one, many = `${one}s`) {
-  return count === 1 ? one : many;
-}
-function percent(fraction, digits = 1) {
-  return `${(fraction * 100).toFixed(digits)}%`;
-}
-function parts(iso) {
-  const [y = "1970", m = "1", d = "1"] = iso.slice(0, 10).split("-");
-  return { y: Number(y), m: Number(m), d: Number(d) };
-}
-function shortDate(iso) {
-  const { y, m, d } = parts(iso);
-  return `${MONTHS[m - 1]} ${String(d).padStart(2, "0")}, ${y}`;
-}
-function monthYear(iso) {
-  const { y, m } = parts(iso);
-  return `${MONTHS[m - 1]} ${y}`;
-}
-function relativeTime(iso, now) {
-  const days = Math.floor((now.getTime() - new Date(iso).getTime()) / 864e5);
-  if (days <= 0) return "today";
-  if (days === 1) return "yesterday";
-  if (days < 30) return `${days} days ago`;
-  const months = Math.floor(days / 30.44);
-  if (months < 12) return `${months} ${plural(months, "month")} ago`;
-  const years = Math.floor(days / 365.25);
-  return `${years} ${plural(years, "year")} ago`;
-}
-
-// src/core/options.ts
-function readOptions(options) {
-  const src = options ?? {};
-  const get = (key) => src[key];
-  return {
-    has: (key) => key in src && src[key] !== void 0 && src[key] !== null,
-    raw: get,
-    string(key, fallback) {
-      const v = get(key);
-      return typeof v === "string" && v.trim() !== "" ? v : typeof v === "number" ? String(v) : fallback;
-    },
-    optionalString(key) {
-      const v = get(key);
-      return typeof v === "string" && v.trim() !== "" ? v : void 0;
-    },
-    number(key, fallback, range = {}) {
-      const v = get(key);
-      const num = typeof v === "number" ? v : typeof v === "string" ? Number(v) : Number.NaN;
-      if (!Number.isFinite(num)) return fallback;
-      return Math.min(range.max ?? Number.POSITIVE_INFINITY, Math.max(range.min ?? Number.NEGATIVE_INFINITY, num));
-    },
-    boolean(key, fallback) {
-      const v = get(key);
-      if (typeof v === "boolean") return v;
-      if (typeof v === "string") return ["true", "yes", "1", "on"].includes(v.trim().toLowerCase());
-      return fallback;
-    },
-    /** Accepts an array or a comma/newline separated string. */
-    list(key, fallback) {
-      const v = get(key);
-      if (Array.isArray(v)) return v.map(String).map((s) => s.trim()).filter(Boolean);
-      if (typeof v === "string") return v.split(/[,\n]/).map((s) => s.trim()).filter(Boolean);
-      return fallback;
-    },
-    oneOf(key, allowed, fallback) {
-      const v = get(key);
-      return typeof v === "string" && allowed.includes(v) ? v : fallback;
-    }
-  };
+  return best;
 }
 
 // src/cards/languages.ts
-var HEX = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
-var safeColor = (c, fallback) => typeof c === "string" && HEX.test(c.trim()) ? c.trim() : fallback;
+var MIN_CONTRAST = 1.8;
 var validStats = (list) => (Array.isArray(list) ? list : []).filter(
   (l) => !!l && typeof l.name === "string" && l.name.trim() !== "" && typeof l.value === "number" && Number.isFinite(l.value) && l.value > 0
 );
@@ -1657,7 +1240,7 @@ function prepareLanguages(list, opts, p) {
     if (hidden.has(key)) continue;
     const cur = merged.get(key);
     if (cur) cur.value += l.value;
-    else merged.set(key, { name, color: safeColor(l.color, p.muted), value: l.value });
+    else merged.set(key, { name, color: ensureContrast(safeColor(l.color, p.muted), p.panel, MIN_CONTRAST, p.text), value: l.value });
   }
   const visible = [...merged.values()].sort((a, b) => b.value - a.value || a.name.localeCompare(b.name));
   const top = Math.max(1, Math.min(10, Math.round(opts.top)));
@@ -1667,7 +1250,7 @@ function prepareLanguages(list, opts, p) {
   if (rest > 0) {
     const existing = items2.find((l) => l.name.toLowerCase() === "other");
     if (existing) existing.value += rest;
-    else items2.push({ name: "Other", color: p.faint, value: rest, other: true });
+    else items2.push({ name: "Other", color: otherColor(p, items2.map((l) => l.color)), value: rest, other: true });
   }
   const total = items2.reduce((s, l) => s + l.value, 0);
   const pcts = percentLabels(items2.map((l) => l.value));
@@ -1684,24 +1267,18 @@ function pickSource(data, wanted) {
   if (wanted === "bytes" && !bytes.length && commits.length) return { weighting: "commits", list: commits };
   return { weighting: wanted, list: wanted === "commits" ? commits : bytes };
 }
-var at = (seconds) => `style="animation-delay:${n(seconds, 3)}s"`;
-var headerWidth = (s) => [...s].length * (12 * 0.6 + 1.4);
-function fitHeader(s, maxWidth) {
-  if (headerWidth(s) <= maxWidth) return s;
-  let out2 = s;
-  while (out2.length > 1 && headerWidth(`${out2}\u2026`) > maxWidth) out2 = out2.slice(0, -1);
-  return `${out2.trimEnd()}\u2026`;
-}
-function edge(color, p) {
-  return contrast(color, p.panel) < 1.6 ? ` stroke="${mix(color, p.text, 0.4)}" stroke-opacity=".55"` : "";
+function legendName(name, maxWidth, size) {
+  const opts = { weight: 600 };
+  if (textWidth(name, size, opts) <= maxWidth) return name;
+  return fit(displayName(name), maxWidth, size, opts);
 }
 var STYLE = ".lg-seg{transform-box:fill-box;transform-origin:0 50%;animation:lg-grow .8s cubic-bezier(.2,.7,.2,1) backwards}@keyframes lg-grow{from{transform:scaleX(0)}}";
 function header(h, x, y, width, p) {
-  const infoW = h.info ? textWidth(h.info, 12, { mono: true }) : 0;
+  const infoW = h.info ? labelWidth(h.info) : 0;
   const room = width - infoW - 32;
-  const showInfo = h.info && room >= Math.min(220, headerWidth(h.title));
-  const title = fitHeader(h.title, showInfo ? room : width);
-  return label(x, y, title, p) + (showInfo ? `<text x="${n(x + width)}" y="${n(y)}" text-anchor="end" class="mono" font-size="12" fill="${p.faint}">${esc(h.info)}</text>` : "");
+  const showInfo = h.info && room >= Math.min(220, labelWidth(h.title));
+  const title = fitLabel(h.title, showInfo ? room : width);
+  return label(x, y, title, p) + (showInfo ? label(x + width, y, h.info, p, { anchor: "end", color: p.muted }) : "");
 }
 function stackedBar(slices, x, y, width, height, p, id) {
   const r = height / 2;
@@ -1711,7 +1288,7 @@ function stackedBar(slices, x, y, width, height, p, id) {
   const segs = slices.map((s, i) => {
     const w = s.share * width;
     const last = i === slices.length - 1;
-    const seg = `<rect class="lg-seg" ${at(0.1 + i * 0.08)} x="${n(cx, 2)}" y="${n(y)}" width="${n(Math.max(1.5, last ? w : w - gap), 2)}" height="${height}" fill="${s.color}"/>`;
+    const seg = `<rect class="lg-seg" ${delay(0.1 + i * 0.08)} x="${n(cx, 2)}" y="${n(y)}" width="${n(Math.max(1.5, last ? w : w - gap), 2)}" height="${height}" fill="${s.color}"/>`;
     cx += w;
     return seg;
   });
@@ -1733,7 +1310,7 @@ function barLayout({ prepared, head, p }) {
   if (!slices.length) {
     const msg = emptyMessage(prepared);
     parts2.push(
-      `<g class="fade" ${at(0.2)}><text x="${PAD5}" y="${barY + 58}" class="sans" font-size="16" font-weight="600" fill="${p.text}">${esc(msg.title)}</text><text x="${PAD5}" y="${barY + 80}" class="sans" font-size="13" fill="${p.muted}">${esc(msg.sub)}</text></g>`
+      `<g class="fade" ${delay(0.2)}><text x="${PAD5}" y="${barY + 58}" class="sans" font-size="16" font-weight="600" fill="${p.text}">${esc(msg.title)}</text><text x="${PAD5}" y="${barY + 80}" class="sans" font-size="13" fill="${p.muted}">${esc(msg.sub)}</text></g>`
     );
     return { width: W5, height: barY + 80 + PAD5, body: parts2.join(""), defs: bar.defs };
   }
@@ -1745,9 +1322,9 @@ function barLayout({ prepared, head, p }) {
     const lx = PAD5 + i % cols * colW;
     const ly = first + Math.floor(i / cols) * pitch;
     const pctW = textWidth(s.pct, 13, { mono: true });
-    const name = fit(s.name, colW - 20 - 8 - pctW - 20, 15, { weight: 600 });
+    const name = legendName(s.name, colW - 20 - 8 - pctW - 20, 15);
     parts2.push(
-      `<g class="fade" ${at(0.35 + i * 0.05)}><circle cx="${n(lx + 6)}" cy="${n(ly - 5)}" r="6" fill="${s.color}"${edge(s.color, p)}/><text x="${n(lx + 20)}" y="${n(ly)}"><tspan class="sans" font-size="15" font-weight="600" fill="${s.other ? p.muted : p.text}">${esc(name)}</tspan><tspan dx="8" class="mono" font-size="13" fill="${p.muted}">${esc(s.pct)}</tspan></text></g>`
+      `<g class="fade" ${delay(0.35 + i * 0.05)}><circle cx="${n(lx + 6)}" cy="${n(ly - 5)}" r="6" fill="${s.color}"/><text x="${n(lx + 20)}" y="${n(ly)}"><tspan class="sans" font-size="15" font-weight="600" fill="${s.other ? p.muted : p.text}">${esc(name)}</tspan><tspan dx="8" class="mono" font-size="13" fill="${p.muted}">${esc(s.pct)}</tspan></text></g>`
     );
   });
   const rows = Math.ceil(slices.length / cols);
@@ -1785,7 +1362,7 @@ function donutLayout({ prepared, head, p }) {
   if (lead) {
     const size = lead.pct.length > 5 ? 28 : 32;
     parts2.push(
-      `<g class="fade" ${at(0.5)}><text x="${n(cx)}" y="${n(cy + 6)}" text-anchor="middle" class="sans" font-size="${size}" font-weight="800" letter-spacing="-1" fill="${p.text}">${esc(lead.pct)}</text><text x="${n(cx)}" y="${n(cy + 28)}" text-anchor="middle" class="sans" font-size="13" fill="${p.muted}">${esc(fit(lead.name, innerW, 13))}</text></g>`
+      `<g class="fade" ${delay(0.5)}><text x="${n(cx)}" y="${n(cy + 6)}" text-anchor="middle" class="sans" font-size="${size}" font-weight="800" letter-spacing="-1" fill="${p.text}">${esc(lead.pct)}</text><text x="${n(cx)}" y="${n(cy + 28)}" text-anchor="middle" class="sans" font-size="13" fill="${p.muted}">${esc(fit(lead.name, innerW, 13))}</text></g>`
     );
   } else {
     parts2.push(`<text x="${n(cx)}" y="${n(cy + 7)}" text-anchor="middle" class="mono" font-size="20" fill="${p.faint}">${esc("</>")}</text>`);
@@ -1795,7 +1372,7 @@ function donutLayout({ prepared, head, p }) {
   if (!slices.length) {
     const msg = emptyMessage(prepared);
     parts2.push(
-      `<g class="fade" ${at(0.2)}><text x="${n(lx0)}" y="${n(cy - 4)}" class="sans" font-size="16" font-weight="600" fill="${p.text}">${esc(msg.title)}</text><text x="${n(lx0)}" y="${n(cy + 18)}" class="sans" font-size="13" fill="${p.muted}">${esc(msg.sub)}</text></g>`
+      `<g class="fade" ${delay(0.2)}><text x="${n(lx0)}" y="${n(cy - 4)}" class="sans" font-size="16" font-weight="600" fill="${p.text}">${esc(msg.title)}</text><text x="${n(lx0)}" y="${n(cy + 18)}" class="sans" font-size="13" fill="${p.muted}">${esc(msg.sub)}</text></g>`
     );
     return { width: W5, height: H3, body: parts2.join(""), defs: "", style };
   }
@@ -1805,8 +1382,9 @@ function donutLayout({ prepared, head, p }) {
   const rows = Math.ceil(slices.length / cols);
   const pitch = Math.min(38, (R * 2 + 8) / Math.max(1, rows));
   const firstY = cy - (rows - 1) * pitch / 2 + 5;
-  const nameW = cols === 1 ? 200 : 150;
   const pctW = 64;
+  const longest = Math.max(0, ...slices.map((s) => textWidth(s.name, 15, { weight: 600 })));
+  const nameW = Math.min(colW - pctW - 16 - 96, Math.max(cols === 1 ? 200 : 150, Math.ceil(longest) + 42));
   const trackW = colW - nameW - pctW - 16;
   slices.forEach((s, i) => {
     const col = Math.floor(i / rows);
@@ -1816,7 +1394,7 @@ function donutLayout({ prepared, head, p }) {
     const tx = x + nameW;
     const w = Math.max(3, s.share * trackW);
     parts2.push(
-      `<g class="fade" ${at(0.3 + i * 0.05)}><circle cx="${n(x + 5)}" cy="${n(y - 5)}" r="5" fill="${s.color}"${edge(s.color, p)}/><text x="${n(x + 18)}" y="${n(y)}" class="sans" font-size="15" font-weight="600" fill="${s.other ? p.muted : p.text}">${esc(fit(s.name, nameW - 30, 15, { weight: 600 }))}</text><rect x="${n(tx)}" y="${n(y - 9)}" width="${n(trackW)}" height="8" rx="4" fill="${p.empty}"/><text x="${n(x + colW)}" y="${n(y)}" text-anchor="end" class="mono" font-size="13" fill="${p.muted}">${esc(s.pct)}</text></g><rect class="lg-seg" ${at(0.35 + i * 0.06)} x="${n(tx)}" y="${n(y - 9)}" width="${n(w)}" height="8" rx="4" fill="${s.color}"${edge(s.color, p)}/>`
+      `<g class="fade" ${delay(0.3 + i * 0.05)}><circle cx="${n(x + 5)}" cy="${n(y - 5)}" r="5" fill="${s.color}"/><text x="${n(x + 18)}" y="${n(y)}" class="sans" font-size="15" font-weight="600" fill="${s.other ? p.muted : p.text}">${esc(legendName(s.name, nameW - 30, 15))}</text><rect x="${n(tx)}" y="${n(y - 9)}" width="${n(trackW)}" height="8" rx="4" fill="${p.empty}"/><text x="${n(x + colW)}" y="${n(y)}" text-anchor="end" class="mono" font-size="13" fill="${p.muted}">${esc(s.pct)}</text></g><rect class="lg-seg" ${delay(0.35 + i * 0.06)} x="${n(tx)}" y="${n(y - 9)}" width="${n(w)}" height="8" rx="4" fill="${s.color}"/>`
     );
   });
   return { width: W5, height: H3, body: parts2.join(""), defs: "", style };
@@ -1825,16 +1403,16 @@ function compactLayout({ prepared, head, p }) {
   const W5 = 400;
   const PAD5 = 24;
   const parts2 = [];
-  if (head) parts2.push(label(PAD5, 40, fitHeader(head.title, W5 - PAD5 * 2), p));
+  if (head) parts2.push(label(PAD5, 40, fitLabel(head.title, W5 - PAD5 * 2), p));
   const barY = head ? 56 : PAD5;
   const { slices } = prepared;
   const bar = stackedBar(slices, PAD5, barY, W5 - PAD5 * 2, 10, p, "lg-bar");
   parts2.push(bar.svg);
   if (!slices.length) {
     const msg = emptyMessage(prepared);
-    const lines = wrap(msg.sub, 46, 2);
+    const lines = wrapPx(msg.sub, 300, 12.5, {}, 2);
     parts2.push(
-      `<g class="fade" ${at(0.2)}><text x="${PAD5}" y="${barY + 44}" class="sans" font-size="15" font-weight="600" fill="${p.text}">${esc(msg.title)}</text>` + lines.map((l, i) => `<text x="${PAD5}" y="${barY + 66 + i * 18}" class="sans" font-size="12.5" fill="${p.muted}">${esc(l)}</text>`).join("") + "</g>"
+      `<g class="fade" ${delay(0.2)}><text x="${PAD5}" y="${barY + 44}" class="sans" font-size="15" font-weight="600" fill="${p.text}">${esc(msg.title)}</text>` + lines.map((l, i) => `<text x="${PAD5}" y="${barY + 66 + i * 18}" class="sans" font-size="12.5" fill="${p.muted}">${esc(l)}</text>`).join("") + "</g>"
     );
     return { width: W5, height: barY + 66 + (lines.length - 1) * 18 + PAD5, body: parts2.join(""), defs: bar.defs };
   }
@@ -1846,9 +1424,9 @@ function compactLayout({ prepared, head, p }) {
     const lx = PAD5 + i % cols * colW;
     const ly = first + Math.floor(i / cols) * pitch;
     const pctW = textWidth(s.pct, 12, { mono: true });
-    const name = fit(s.name, colW - 16 - 6 - pctW - 12, 13.5, { weight: 600 });
+    const name = legendName(s.name, colW - 16 - 6 - pctW - 12, 13.5);
     parts2.push(
-      `<g class="fade" ${at(0.3 + i * 0.05)}><circle cx="${n(lx + 5)}" cy="${n(ly - 4.5)}" r="5" fill="${s.color}"${edge(s.color, p)}/><text x="${n(lx + 16)}" y="${n(ly)}"><tspan class="sans" font-size="13.5" font-weight="600" fill="${s.other ? p.muted : p.text}">${esc(name)}</tspan><tspan dx="6" class="mono" font-size="12" fill="${p.muted}">${esc(s.pct)}</tspan></text></g>`
+      `<g class="fade" ${delay(0.3 + i * 0.05)}><circle cx="${n(lx + 5)}" cy="${n(ly - 4.5)}" r="5" fill="${s.color}"/><text x="${n(lx + 16)}" y="${n(ly)}"><tspan class="sans" font-size="13.5" font-weight="600" fill="${s.other ? p.muted : p.text}">${esc(name)}</tspan><tspan dx="6" class="mono" font-size="12" fill="${p.muted}">${esc(s.pct)}</tspan></text></g>`
     );
   });
   const rows = Math.ceil(slices.length / cols);
@@ -1930,6 +1508,43 @@ function yearWindow(calendar, now, weeks = 53) {
   }
   return cells;
 }
+function yearStart(now) {
+  const today = parseDate(isoDate(now));
+  const y = today.getUTCFullYear() - 1;
+  const m = today.getUTCMonth();
+  const start = new Date(Date.UTC(y, m, today.getUTCDate()));
+  return isoDate(start.getUTCMonth() === m ? start : new Date(Date.UTC(y, m + 1, 0)));
+}
+var cleanCount = (c) => typeof c === "number" && Number.isFinite(c) && c > 0 ? c : 0;
+function lastYear(calendar, now) {
+  const counts = countsByDate(Array.isArray(calendar) ? calendar.filter((d) => d && typeof d.date === "string") : []);
+  const end = parseDate(isoDate(now)).getTime();
+  const days = [];
+  for (let t = parseDate(yearStart(now)).getTime(); t <= end; t += DAY) {
+    const date = isoDate(new Date(t));
+    days.push({ date, count: cleanCount(counts.get(date)) });
+  }
+  return days;
+}
+function yearTotal(data, now) {
+  return cleanCount(data.year?.contributions) || totalOf(lastYear(data.calendar, now));
+}
+function monthStarts(cells, weeks, minGap, minTail = 2) {
+  const starts = [];
+  let prev = -1;
+  for (let w = 0; w < weeks; w++) {
+    const first = cells.find((c) => c.week === w);
+    if (!first) continue;
+    const month = Number(first.date.slice(5, 7)) - 1;
+    if (month !== prev) starts.push({ week: w, month });
+    prev = month;
+  }
+  return starts.filter((s, i) => {
+    const next = starts[i + 1];
+    if (i === 0 && next && next.week - s.week < minGap) return false;
+    return !(i > 0 && !next && weeks - s.week < minTail);
+  });
+}
 function streaks(calendar, now) {
   const today = isoDate(now);
   const days = calendar.filter((d) => d.date <= today);
@@ -1961,6 +1576,7 @@ function levelScale(counts) {
     return 4;
   };
 }
+var totalOf = (days) => days.reduce((s, d) => s + d.count, 0);
 
 // src/cards/landscape.ts
 var W = 1200;
@@ -1973,7 +1589,7 @@ var CLEARANCE = 24;
 var COL_W = 200;
 var INS_X = W - PAD - 2 * COL_W;
 var ROW_H = 84;
-var TOP = 52;
+var TOP = 56;
 var SCALES = ["sqrt", "linear", "log"];
 var SCALE_NOTE = {
   sqrt: "height \u221D \u221Acontributions",
@@ -1994,8 +1610,8 @@ function share(part, whole) {
   const pct = whole > 0 ? part / whole * 100 : 0;
   return part > 0 && pct < 1 ? "<1%" : `${Math.round(pct)}%`;
 }
-function summarize(raw) {
-  const cells = raw.map((c) => ({ ...c, count: Number.isFinite(c.count) && c.count > 0 ? Math.round(c.count) : 0 }));
+var sanitize = (raw) => raw.map((c) => ({ ...c, count: Number.isFinite(c.count) && c.count > 0 ? Math.round(c.count) : 0 }));
+function summarize(cells) {
   let total = 0;
   let active = 0;
   let best = null;
@@ -2015,7 +1631,7 @@ function summarize(raw) {
   });
   const month = { key: "", total: -1 };
   for (const [key, t] of byMonth) if (t > month.total) Object.assign(month, { key, total: t });
-  return { cells, total, peak: best?.count ?? 0, best, active, weekday, month };
+  return { days: cells.length, total, peak: best?.count ?? 0, best, active, weekday, month };
 }
 function heightFn(scale, peak, maxH) {
   if (peak <= 0) return () => 0;
@@ -2051,10 +1667,15 @@ function renderLandscape(ctx) {
   const hideTitle = o.boolean("hideTitle", false);
   const spanPhrase = weeks >= 52 ? "in the last year" : `in the last ${weeks} weeks`;
   const titleText2 = o.string("title", "Contribution landscape");
-  const sum = summarize(yearWindow(ctx.data.calendar, ctx.now, weeks));
-  const { cells, total, peak, best } = sum;
-  const empty = total === 0;
-  const height = heightFn(scale, peak, maxH);
+  const cells = sanitize(yearWindow(ctx.data.calendar, ctx.now, weeks));
+  const fullYear = weeks >= 52;
+  const counted = fullYear ? sanitize(lastYear(ctx.data.calendar, ctx.now).map((d) => ({ ...d, week: 0, day: parseDate(d.date).getUTCDay() }))) : cells;
+  const sum = summarize(counted);
+  const total = fullYear ? yearTotal(ctx.data, ctx.now) : sum.total;
+  const { peak, best } = sum;
+  const peakAll = Math.max(0, ...cells.map((c) => c.count));
+  const empty = peakAll === 0;
+  const height = heightFn(scale, peakAll, maxH);
   const level = levelScale(cells.map((c) => c.count));
   const colours = levelColours(p, dark);
   const s = Math.min(1.4, 964 / (weeks * 17 + 63));
@@ -2072,10 +1693,9 @@ function renderLandscape(ctx) {
   const headlineValue = fmt(total);
   const headlineRest = `${plural(total, "contribution")} ${spanPhrase}`;
   const headlineW = textWidth(headlineValue, 36, { weight: 800 }) + 12 + textWidth(headlineRest, 16);
-  const labelMaxChars = Math.floor((INS_X - PAD - 40) / 8.6);
-  const labelText = titleText2.length > labelMaxChars ? `${titleText2.slice(0, labelMaxChars - 1).trimEnd()}\u2026` : titleText2;
+  const labelText = fitLabel(titleText2, INS_X - PAD - 40);
   if (!hideTitle) {
-    reserved.push({ x0: PAD, y0: PAD - 8, x1: PAD + Math.max(headlineW, labelText.length * 8.6), y1: 106 });
+    reserved.push({ x0: PAD, y0: PAD - 8, x1: PAD + Math.max(headlineW, labelWidth(labelText)), y1: TOP + 54 });
   }
   const insightsBlock = !empty && showInsights;
   const emptyBlock = empty;
@@ -2099,23 +1719,15 @@ function renderLandscape(ctx) {
     const [x, y] = P(w, d, h);
     return `${n(x)} ${n(y)}`;
   };
-  const monthLabels2 = [];
-  let prevMonth = "";
-  for (const c of cells) {
-    if (c.day !== 0) continue;
-    const m = c.date.slice(5, 7);
-    if (m !== prevMonth) {
-      if (prevMonth) {
-        const [x, y] = P(c.week + 0.5, 7 + RIM);
-        monthLabels2.push({ x, y: y + SLAB + 18, text: monthYear(c.date).slice(0, 3) });
-      }
-      prevMonth = m;
-    }
-  }
+  const minGap = Math.ceil((textWidth("Mmm", 11, { mono: true }) + 8) / wx);
+  const monthLabels2 = monthStarts(cells, weeks, minGap).map((m) => {
+    const [x, y] = P(m.week + 0.5, 7 + RIM);
+    return { x, y: y + SLAB + 18, text: MONTHS[m.month] ?? "" };
+  });
   const slabBottom = P(weeks + RIM, 7 + RIM)[1] + SLAB;
   let H3 = slabBottom + 40;
   for (const m of monthLabels2) H3 = Math.max(H3, m.y + 26);
-  const legend2 = legendParts(empty, peak, scale);
+  const legend2 = legendParts(empty, peakAll, scale);
   const legendRight = PAD + legend2.width;
   const frontAt = (x) => {
     const w = Math.max(-RIM, Math.min(weeks + RIM, (x - ox - px(0, 7 + RIM)) / wx));
@@ -2183,8 +1795,8 @@ function renderLandscape(ctx) {
   const [gx, gy] = P(glowW, 3.5, empty ? 0 : maxH * 0.45);
   const axis = [1, 3, 5].map((d) => {
     const [x, y] = P(weeks + RIM, d + 0.5);
-    return `<text x="${n(x + dayLabelGap)}" y="${n(y + 4)}" class="mono" font-size="11" fill="${p.faint}">${(WEEKDAYS[d] ?? "").slice(0, 3)}</text>`;
-  }).join("") + monthLabels2.map((m) => `<text x="${n(m.x)}" y="${n(m.y)}" text-anchor="middle" class="mono" font-size="11" fill="${p.faint}">${m.text}</text>`).join("");
+    return `<text x="${n(x + dayLabelGap)}" y="${n(y + 4)}" class="mono" font-size="11" fill="${p.muted}">${(WEEKDAYS[d] ?? "").slice(0, 3)}</text>`;
+  }).join("") + monthLabels2.map((m) => `<text x="${n(m.x)}" y="${n(m.y)}" text-anchor="middle" class="mono" font-size="11" fill="${p.muted}">${m.text}</text>`).join("");
   let pin = "";
   if (showPeak && peakBar && best) {
     const [cx, cy] = P(peakBar.w + 0.5, peakBar.d + 0.5, peakBar.h);
@@ -2222,20 +1834,20 @@ function renderLandscape(ctx) {
       ["Best day", fmt(best.count), shortDate(best.date)],
       ["Busiest month", monthYear(`${sum.month.key}-01`), `${fmt(sum.month.total)} ${plural(sum.month.total, "contribution")}`],
       ["Favourite weekday", WEEKDAYS[sum.weekday.day] ?? "Sunday", `${fmt(sum.weekday.total)} ${plural(sum.weekday.total, "contribution")}`],
-      ["Active days", fmt(sum.active), `of ${fmt(cells.length)} \xB7 ${share(sum.active, cells.length)}`]
+      ["Active days", fmt(sum.active), `of ${fmt(sum.days)} \xB7 ${share(sum.active, sum.days)}`]
     ];
     side = items2.map(([name, value, sub], i) => {
       const x = INS_X + i % 2 * COL_W;
       const y = TOP + Math.floor(i / 2) * ROW_H;
-      return `<g class="fade" style="animation-delay:${n(0.25 + i * 0.08, 3)}s"><text x="${x}" y="${y}" class="mono" font-size="11" letter-spacing="1" fill="${p.faint}">${esc(name.toUpperCase())}</text><text x="${x}" y="${y + 29}" class="sans" font-size="23" font-weight="700" letter-spacing="-.3" fill="${p.text}">${esc(fit(value, COL_W - 16, 23, { weight: 700 }))}</text><text x="${x}" y="${y + 49}" class="mono" font-size="11.5" fill="${p.muted}">${esc(fit(sub, COL_W - 12, 11.5, { mono: true }))}</text></g>`;
+      return `<g class="fade" style="animation-delay:${n(0.25 + i * 0.08, 3)}s"><text x="${x}" y="${y}" class="mono" font-size="11" letter-spacing="1" fill="${p.muted}">${esc(name.toUpperCase())}</text><text x="${x}" y="${y + 29}" class="sans" font-size="23" font-weight="700" letter-spacing="-.3" fill="${p.text}">${esc(fit(value, COL_W - 16, 23, { weight: 700 }))}</text><text x="${x}" y="${y + 49}" class="mono" font-size="11.5" fill="${p.muted}">${esc(fit(sub, COL_W - 12, 11.5, { mono: true }))}</text></g>`;
     }).join("");
   } else if (emptyBlock) {
-    side = `<g class="fade" style="animation-delay:.25s"><text x="${INS_X}" y="${TOP}" class="mono" font-size="11" letter-spacing="1" fill="${p.faint}">NO ACTIVITY YET</text><text x="${INS_X}" y="${TOP + 30}" class="sans" font-size="23" font-weight="700" letter-spacing="-.3" fill="${p.text}">A blank canvas</text><text x="${INS_X}" y="${TOP + 56}" class="sans" font-size="14" fill="${p.muted}">Every commit, pull request, issue and review</text><text x="${INS_X}" y="${TOP + 76}" class="sans" font-size="14" fill="${p.muted}">raises a bar on this landscape.</text></g>`;
+    side = `<g class="fade" style="animation-delay:.25s"><text x="${INS_X}" y="${TOP}" class="mono" font-size="11" letter-spacing="1" fill="${p.muted}">NO ACTIVITY YET</text><text x="${INS_X}" y="${TOP + 30}" class="sans" font-size="23" font-weight="700" letter-spacing="-.3" fill="${p.text}">A blank canvas</text><text x="${INS_X}" y="${TOP + 56}" class="sans" font-size="14" fill="${p.muted}">Every commit, pull request, issue and review</text><text x="${INS_X}" y="${TOP + 76}" class="sans" font-size="14" fill="${p.muted}">raises a bar on this landscape.</text></g>`;
   }
   const legendSvg = renderLegend(legend2, legendY, colours, p);
   const body = shadow + slab + floor + axis + bars + pin + header2 + side + legendSvg;
   const who = ctx.data.name?.trim() || ctx.data.login;
-  const summary = empty ? `No contributions ${spanPhrase}.` : `${fmt(total)} ${plural(total, "contribution")} ${spanPhrase}. Best day: ${fmt(peak)} on ${shortDate(best?.date ?? "")}. Busiest month: ${monthYear(`${sum.month.key}-01`)}. Favourite weekday: ${WEEKDAYS[sum.weekday.day]}. Active on ${sum.active} of ${cells.length} days.`;
+  const summary = empty ? `No contributions ${spanPhrase}.` : `${fmt(total)} ${plural(total, "contribution")} ${spanPhrase}. Best day: ${fmt(peak)} on ${shortDate(best?.date ?? "")}. Busiest month: ${monthYear(`${sum.month.key}-01`)}. Favourite weekday: ${WEEKDAYS[sum.weekday.day]}. Active on ${sum.active} of ${sum.days} days.`;
   const svg = shell({
     width: W,
     height: H3,
@@ -2281,7 +1893,7 @@ function renderLegend(legend2, y, colours, p) {
   }).join("");
   const moreX = PAD + CUBES_X + 5 * CUBE_STEP + 6;
   const notes = legend2.notes.map((t) => `<tspan dx="12" fill-opacity=".6">\xB7</tspan><tspan dx="12">${esc(t)}</tspan>`).join("");
-  return `<g class="fade" style="animation-delay:.4s"><text x="${PAD}" y="${n(y)}" class="mono" font-size="${LEGEND_SIZE}" fill="${p.faint}">Less</text>` + cubes + `<text x="${n(moreX)}" y="${n(y)}" class="mono" font-size="${LEGEND_SIZE}" fill="${p.faint}">More${notes}</text></g>`;
+  return `<g class="fade" style="animation-delay:.4s"><text x="${PAD}" y="${n(y)}" class="mono" font-size="${LEGEND_SIZE}" fill="${p.muted}">Less</text>` + cubes + `<text x="${n(moreX)}" y="${n(y)}" class="mono" font-size="${LEGEND_SIZE}" fill="${p.muted}">More${notes}</text></g>`;
 }
 var card2 = {
   id: "3d",
@@ -2413,22 +2025,9 @@ function layout(o) {
   };
 }
 function monthLabels(cells, weeks, L, p) {
-  const starts = [];
-  let prev = -1;
-  for (let w = 0; w < weeks; w++) {
-    const first = cells[w * 7];
-    if (!first) continue;
-    const month = Number(first.date.slice(5, 7)) - 1;
-    if (month !== prev) starts.push({ week: w, month });
-    prev = month;
-  }
   const minGap = Math.ceil((textWidth("Mmm", AXIS, { mono: true }) + 8) / L.pitch);
   const out2 = [];
-  for (let i = 0; i < starts.length; i++) {
-    const s = starts[i];
-    if (!s) continue;
-    const next = starts[i + 1];
-    if (i === 0 && next && next.week - s.week < minGap) continue;
+  for (const s of monthStarts(cells, weeks, minGap)) {
     const name = MONTHS[s.month] ?? "";
     const x = L.gx + s.week * L.pitch;
     if (x + textWidth(name, AXIS, { mono: true }) > L.gx + L.gridW + 1) continue;
@@ -2443,7 +2042,7 @@ function monthLabels(cells, weeks, L, p) {
     const y = L.gy + d * L.pitch + L.cell / 2 + AXIS * 0.35;
     out2.push(`<text x="${n(L.gx - 12)}" y="${n(y)}" text-anchor="end">${name}</text>`);
   }
-  return `<g class="mono fade" font-size="${AXIS}" fill="${p.faint}">${out2.join("")}</g>`;
+  return `<g class="mono fade" font-size="${AXIS}" fill="${p.muted}">${out2.join("")}</g>`;
 }
 function legend(L, ramp, p) {
   const size = 12;
@@ -2454,7 +2053,7 @@ function legend(L, ramp, p) {
   const swatches = ramp.map(
     (c, i) => `<rect x="${n(cellsLeft + i * (size + 4))}" y="${n(L.footY - 10)}" width="${size}" height="${size}" rx="3" fill="${c}"/>`
   ).join("");
-  return `<g class="mono" font-size="${AXIS}" fill="${p.faint}"><text x="${n(cellsLeft - 8)}" y="${n(L.footY)}" text-anchor="end">Less</text>${swatches}<text x="${n(right)}" y="${n(L.footY)}" text-anchor="end">More</text></g>`;
+  return `<g class="mono" font-size="${AXIS}" fill="${p.muted}"><text x="${n(cellsLeft - 8)}" y="${n(L.footY)}" text-anchor="end">Less</text>${swatches}<text x="${n(right)}" y="${n(L.footY)}" text-anchor="end">More</text></g>`;
 }
 function emptyMessage2(L, p) {
   const head = "No contributions yet";
@@ -2546,7 +2145,10 @@ function renderGrid(ctx) {
   const ramp = contribRamp(p, ctx.mode);
   const cells = yearWindow(ctx.data.calendar ?? [], ctx.now, weeks).map((c) => ({ ...c, count: safeCount(c.count) }));
   const level = levelScale(cells.map((c) => c.count));
-  const stats = summarize2(cells);
+  const fullYear = weeks >= 52;
+  const counted = fullYear ? lastYear(ctx.data.calendar ?? [], ctx.now).map((d) => ({ ...d, week: 0, day: 0, count: safeCount(d.count) })) : cells;
+  const stats = summarize2(counted);
+  if (fullYear) stats.total = yearTotal(ctx.data, ctx.now);
   const first = cells[0];
   const last = cells[cells.length - 1];
   const range = first && last ? `${shortDate(first.date)} \u2013 ${shortDate(last.date)}` : "";
@@ -2596,10 +2198,10 @@ function renderGrid(ctx) {
   body.push(motion.under);
   body.push(`<g>${columns.join("")}</g>`);
   body.push(motion.over);
-  if (stats.total === 0) body.push(emptyMessage2(L, p));
+  if (cells.every((c) => c.count === 0)) body.push(emptyMessage2(L, p));
   if (range) {
     body.push(
-      `<text x="${n(L.gx)}" y="${n(L.footY)}" class="mono fade" font-size="${AXIS}" fill="${p.faint}">${esc(range)}</text>`
+      `<text x="${n(L.gx)}" y="${n(L.footY)}" class="mono fade" font-size="${AXIS}" fill="${p.muted}">${esc(range)}</text>`
     );
   }
   body.push(`<g class="fade">${legend(L, ramp, p)}</g>`);
@@ -2619,13 +2221,6 @@ function renderGrid(ctx) {
     animate: ctx.animate
   });
   return { name: "grid", alt: `Contribution grid: ${summary}`, svg, layout: "full" };
-}
-var labelWidth = (s) => textWidth(s.toUpperCase(), 12, { mono: true }) + [...s].length * 1.4;
-function fitLabel(text, maxWidth) {
-  if (labelWidth(text) <= maxWidth) return text;
-  const chars2 = [...text];
-  while (chars2.length > 1 && labelWidth(`${chars2.join("")}\u2026`) > maxWidth) chars2.pop();
-  return `${chars2.join("").trimEnd()}\u2026`;
 }
 var card3 = {
   id: "grid",
@@ -3024,7 +2619,7 @@ function slugify(input) {
 }
 function canonical(input) {
   const slug = slugify(input);
-  return ALIASES[slug] ?? slug;
+  return own(ALIASES, slug) ?? slug;
 }
 function monogramText(input) {
   const clean2 = input.trim();
@@ -3032,18 +2627,18 @@ function monogramText(input) {
   if ([...clean2].length <= 3) return clean2.charAt(0).toUpperCase() + clean2.slice(1);
   const words2 = clean2.split(/[\s\-_/.]+/).filter((w) => /[\p{L}\p{N}]/u.test(w));
   if (words2.length >= 2) return words2.slice(0, 2).map((w) => [...w][0]?.toUpperCase() ?? "").join("");
-  const chars2 = [...clean2.replace(/[^\p{L}\p{N}]/gu, "")];
-  if (!chars2.length) return [...clean2].slice(0, 2).join("");
-  return (chars2[0] ?? "").toUpperCase() + (chars2[1] ?? "").toLowerCase();
+  const chars = [...clean2.replace(/[^\p{L}\p{N}]/gu, "")];
+  if (!chars.length) return [...clean2].slice(0, 2).join("");
+  return (chars[0] ?? "").toUpperCase() + (chars[1] ?? "").toLowerCase();
 }
 function resolveIcon(input) {
   const raw = String(input ?? "").trim();
   const slug = canonical(raw);
-  const icon3 = ICONS[slug];
-  if (icon3) return { slug, title: TITLES[slug] ?? icon3.title, hex: `#${icon3.hex}`, category: icon3.category, path: icon3.path, known: true };
-  const mono = MONOGRAMS[slug];
+  const icon3 = own(ICONS, slug);
+  if (icon3) return { slug, title: own(TITLES, slug) ?? icon3.title, hex: `#${icon3.hex}`, category: icon3.category, path: icon3.path, known: true };
+  const mono = own(MONOGRAMS, slug);
   if (mono) return { slug, title: mono.title, hex: `#${mono.hex}`, category: mono.category, monogram: mono.text, known: true };
-  const glyph = GLYPHS[slug];
+  const glyph = own(GLYPHS, slug);
   if (glyph) return { slug, title: glyph.title, hex: "", category: "generic", stroke: glyph.stroke, known: true };
   return { slug: slug || "unknown", title: raw || "Unknown", hex: "", category: "generic", monogram: monogramText(raw), known: false };
 }
@@ -3058,11 +2653,7 @@ function legible(color, bg, ink, base = 2.3) {
   const min = Math.max(1.35, base - 1.1 * sat);
   if (contrast(color, bg) >= min) return color;
   if (sat < 0.14) return ink;
-  for (let k = 0.15; k < 1; k += 0.15) {
-    const c = mix(color, ink, k);
-    if (contrast(c, bg) >= min) return c;
-  }
-  return ink;
+  return ensureContrast(color, bg, min, ink);
 }
 function inkOn(fill, a, b) {
   return contrast(fill, a) >= contrast(fill, b) ? a : b;
@@ -3160,7 +2751,7 @@ var LANG_ALIASES = {
   json: "json"
 };
 function codeLanguageOf(name) {
-  return LANG_ALIASES[slugify(name)] ?? null;
+  return own(LANG_ALIASES, slugify(name)) ?? null;
 }
 function detectLanguage(data) {
   for (const l of data.languages) {
@@ -3346,16 +2937,83 @@ function tokenize(line, lang2) {
   return out2;
 }
 var BUILD_VERB = /^(i\s*(am|'m)\s+)?(building|making|creating|crafting|shipping|writing|developing|designing|exploring|working\s+on|i\s+build|i\s+make|i\s+create|i\s+craft|i\s+ship|i\s+write|i\s+develop|i\s+design)\s+/i;
-function focusFrom(bio) {
-  const all = sentences(bio);
-  const sentence = all.find((s) => BUILD_VERB.test(s)) ?? all[0];
-  if (!sentence) return void 0;
-  const text = sentence.replace(BUILD_VERB, "").trim() || sentence;
-  return text.charAt(0).toUpperCase() + text.slice(1);
+function bioClauses(bio) {
+  const out2 = [];
+  for (const line of (bio ?? "").split(/\r?\n/)) {
+    for (const segment of line.split(/\s*\|\s*|\s+[—–-]\s+/)) {
+      for (const sentence of segment.replace(/\s+/g, " ").trim().split(/(?<=[.!?])\s+/)) {
+        const clause = sentence.trim();
+        if (/[\p{L}\p{N}]/u.test(clause)) out2.push(clause);
+      }
+    }
+  }
+  return out2;
 }
-function sentences(bio) {
-  const clean2 = (bio ?? "").replace(/\s+/g, " ").trim();
-  return clean2.split(/(?<=[.!?])\s+/).map((s) => s.replace(/[.!?]+$/, "").trim()).filter(Boolean);
+var stripEnd = (s) => s.replace(/[\s.!?,;:·]+$/, "").trim();
+var keyOf = (s) => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+function roleFrom(clause, fits) {
+  const text = stripEnd(clause);
+  if (!text) return "";
+  if (fits(text)) return text;
+  const cuts = [...text.matchAll(/\s+[·•/]\s+/g)].map((m) => m.index).reverse();
+  for (const at of cuts) {
+    const head = stripEnd(text.slice(0, at));
+    if (head && fits(head)) return head;
+  }
+  return "";
+}
+function isLocation(clause, location) {
+  if (/^\s*(?:📍|🌍|🌎|🌏)/u.test(clause)) return true;
+  const key = keyOf(clause.replace(/^\s*(?:based\s+in|living\s+in|located\s+in|from)\s+/i, ""));
+  if (!key || !location.trim()) return false;
+  const parts2 = location.split(/[,/·|]/).map(keyOf).filter(Boolean);
+  return key === keyOf(location) || parts2.includes(key);
+}
+var restates = (a, b) => {
+  const [x, y] = [keyOf(a), keyOf(b)];
+  if (!x || !y) return false;
+  if (!x.includes(" ") || !y.includes(" ")) return x === y;
+  return `${x} `.startsWith(`${y} `) || `${y} `.startsWith(`${x} `);
+};
+var ROLE_SIZE = 25;
+var ROLE_WEIGHT = 600;
+var DEFAULT_ROLE = "Developer";
+function deriveCopy(data, colW, roleOption) {
+  const clauses = bioClauses(data.bio);
+  if (roleOption) return { role: roleOption, rest: clauses.filter((c) => !restates(c, roleOption)) };
+  const fits = (s) => textWidth(s, ROLE_SIZE, { weight: ROLE_WEIGHT }) <= colW;
+  const at = clauses.findIndex((c) => !isLocation(c, data.location ?? ""));
+  const role = at >= 0 ? roleFrom(clauses[at] ?? "", fits) : "";
+  return role ? { role, rest: clauses.filter((_, i) => i !== at) } : { role: DEFAULT_ROLE, rest: clauses };
+}
+function joinClauses(parts2) {
+  let out2 = "";
+  for (const part of parts2) out2 = !out2 ? part : `${out2}${/[.!?]$/.test(out2) ? " " : " \xB7 "}${part}`;
+  return out2;
+}
+var NOISE_TOPICS = /* @__PURE__ */ new Set(["hacktoberfest", "github", "awesome", "awesome-list"]);
+function topTopics(data, limit = 3) {
+  const profileRepo = `${data.login}/${data.login}`.toLowerCase();
+  const counts = /* @__PURE__ */ new Map();
+  for (const repo2 of data.repos ?? []) {
+    if (repo2.isPrivate || repo2.isFork || repo2.isArchived || repo2.nameWithOwner.toLowerCase() === profileRepo) continue;
+    for (const topic of new Set((repo2.topics ?? []).map((t) => t.trim().toLowerCase()))) {
+      if (!topic || NOISE_TOPICS.has(topic) || codeLanguageOf(topic) || resolveIcon(topic).category === "language") continue;
+      counts.set(topic, (counts.get(topic) ?? 0) + 1);
+    }
+  }
+  return [...counts].sort((a, b) => b[1] - a[1]).slice(0, limit).map(([t]) => t);
+}
+function focusOf(data, copy) {
+  const location = data.location?.trim() ?? "";
+  const left = copy.rest.filter((c) => !restates(c, copy.role) && !isLocation(c, location));
+  const sentence = left.find((s) => BUILD_VERB.test(s)) ?? left[0];
+  if (sentence) {
+    const text = stripEnd(sentence.replace(BUILD_VERB, "")) || stripEnd(sentence);
+    if (text && !restates(text, copy.role)) return text.charAt(0).toUpperCase() + text.slice(1);
+  }
+  const topics = topTopics(data);
+  return topics.length ? topics : void 0;
 }
 function fitWords(s, maxW, size, opts = {}) {
   const cut = fit(s, maxW, size, opts);
@@ -3364,17 +3022,17 @@ function fitWords(s, maxW, size, opts = {}) {
   const space = kept.search(/[\s·,;:/-]+\S*$/);
   return space >= kept.length * 0.55 ? `${kept.slice(0, space).replace(/[\s·,;:/-]+$/, "")}\u2026` : cut;
 }
-function firstSentence(bio) {
-  return sentences(bio)[0] ?? "";
+function languageNames(data, limit) {
+  return [...new Set(data.languages.map((l) => displayName(l.name)).filter(Boolean))].slice(0, limit);
 }
-function factsFrom(data, name, now) {
+function factsFrom(data, name, now, copy) {
   const year = Number(data.createdAt.slice(0, 4));
   return {
     name,
     login: data.login,
     base: data.location?.trim() || void 0,
-    stack: data.languages.slice(0, 3).map((l) => l.name),
-    focus: focusFrom(data.bio),
+    stack: languageNames(data, 3),
+    focus: focusOf(data, copy ?? deriveCopy(data, CODE_COL_W)),
     since: Number.isFinite(year) && year > 1990 ? year : now.getUTCFullYear()
   };
 }
@@ -3519,7 +3177,7 @@ function autoCode(f, lang2, maxChars) {
   const fields = [["name", { kind: "str", v: f.name }]];
   if (f.base) fields.push(["base", { kind: "str", v: f.base }]);
   if (f.stack.length) fields.push(["stack", { kind: "list", v: f.stack }]);
-  if (f.focus) fields.push(["focus", { kind: "str", v: f.focus }]);
+  if (f.focus?.length) fields.push(["focus", typeof f.focus === "string" ? { kind: "str", v: f.focus } : { kind: "list", v: f.focus }]);
   if (fields.length < 3 && f.login) fields.push(["github", { kind: "str", v: `@${f.login}` }]);
   fields.push(["since", { kind: "num", v: f.since }]);
   const maxFields = 9 - t.open.length - t.close.length;
@@ -3549,8 +3207,8 @@ function autoCode(f, lang2, maxChars) {
   return [...t.open, ...lines, ...t.close].map((l) => clampLine(l, maxChars));
 }
 function clampLine(line, maxChars) {
-  const chars2 = [...line];
-  return chars2.length <= maxChars ? line : `${chars2.slice(0, maxChars - 1).join("")}\u2026`;
+  const chars = [...line];
+  return chars.length <= maxChars ? line : `${chars.slice(0, maxChars - 1).join("")}\u2026`;
 }
 function customCode(code, maxChars) {
   const lines = code.replace(/\r\n?/g, "\n").replace(/\t/g, "    ").split("\n").map((l) => l.trimEnd());
@@ -3564,36 +3222,36 @@ function content(ctx, colW) {
   const d = ctx.data;
   const o = readOptions(ctx.options);
   const name = o.string("name", d.name?.trim() || d.login || "Hello, world");
-  const sentence = firstSentence(d.bio);
-  const roleFromBio = sentence && sentence.length <= 56 ? sentence : "";
-  const role = o.string("role", roleFromBio || "Developer");
+  const copy = deriveCopy(d, colW, o.optionalString("role")?.trim());
+  const role = copy.role;
   const statusRaw = o.string("status", "");
   const location = d.location?.trim() ?? "";
   const status = /^(none|false|off|hide)$/i.test(statusRaw.trim()) ? "" : statusRaw || ["open to collaboration", location].filter(Boolean).join(" \xB7 ");
   let tagline;
   const rawTag = o.raw("tagline");
   if (Array.isArray(rawTag)) tagline = rawTag.map((s) => String(s).trim()).filter(Boolean).slice(0, 2);
-  else if (typeof rawTag === "string" && rawTag.trim()) tagline = wrapPx(rawTag.trim(), colW, 17, 2);
+  else if (typeof rawTag === "string" && rawTag.trim()) tagline = wrapPx(rawTag.trim(), colW, 17, {}, 2);
   else {
-    const bio = (d.bio ?? "").replace(/\s+/g, " ").trim();
-    const rest = roleFromBio && !o.has("role") ? bio.slice(bio.indexOf(sentence) + sentence.length).replace(/^[.!?\s]+/, "") : bio;
-    const parts2 = [rest];
-    if (d.company?.trim()) parts2.push(`Currently at ${d.company.trim()}.`);
-    if (location && !status.includes(location)) parts2.push(`Based in ${location}.`);
-    const text = parts2.filter(Boolean).join(" ").trim();
-    tagline = wrapPx(text || `Building in public on GitHub since ${factsFrom(d, name, ctx.now).since}.`, colW, 17, 2);
+    const locationShown = !!location && status.toLowerCase().includes(location.toLowerCase());
+    const parts2 = copy.rest.filter((c) => !(locationShown && isLocation(c, location)));
+    const company = d.company?.trim() ?? "";
+    const bioKey = keyOf(d.bio ?? "");
+    if (company && !` ${bioKey} `.includes(` ${keyOf(company)} `)) parts2.push(`Currently at ${company}.`);
+    if (location && !locationShown && !parts2.some((c) => isLocation(c, location))) parts2.push(`Based in ${location}.`);
+    const text = joinClauses(parts2);
+    tagline = wrapPx(text || `Building in public on GitHub since ${factsFrom(d, name, ctx.now, copy).since}.`, colW, 17, {}, 2);
   }
-  const chips2 = o.has("chips") ? o.list("chips", []) : d.languages.slice(0, 6).map((l) => l.name);
-  return { name, role, tagline, chips: chips2.slice(0, 12), status };
-}
-function wrapPx(text, maxW, size, maxLines) {
-  const avg = textWidth("abcdefghijklmnopqrstuvwxyz", size) / 26;
-  return wrap(text, Math.max(8, Math.floor(maxW / avg)), maxLines).map((l) => fit(l, maxW, size));
+  const chips2 = o.has("chips") ? o.list("chips", []) : languageNames(d, 6);
+  return { name, role, copy, tagline, chips: chips2.slice(0, 12), status };
 }
 function nameFit(name, maxW) {
   const width = (s, size) => textWidth(s, size, { weight: 800 }) - size * 0.033 * Math.max(0, [...s].length - 1);
   for (let size = 76; size >= 48; size -= 2) if (width(name, size) <= maxW) return { text: name, size };
   return { text: fitWords(name, maxW, 48, { weight: 800 }), size: 48 };
+}
+var DOT_CONTRAST = 2.2;
+function dotColor(color, bg, p) {
+  return ensureContrast(safeColor(color, p.accentB), bg, DOT_CONTRAST, p.text);
 }
 function chipRow(chips2, x0, y, maxX, ctx) {
   const p = ctx.palette;
@@ -3602,10 +3260,11 @@ function chipRow(chips2, x0, y, maxX, ctx) {
   chips2.forEach((chip2, i) => {
     const text = fit(chip2, 220, 13, { mono: true });
     const icon3 = resolveIcon(chip2);
-    const lang2 = ctx.data.languages.find((l) => l.name.toLowerCase() === chip2.toLowerCase());
+    const key = chip2.trim().toLowerCase();
+    const lang2 = ctx.data.languages.find((l) => l.name.toLowerCase() === key || displayName(l.name).toLowerCase() === key);
     const w = Math.ceil(12 + 14 + 8 + textWidth(text, 13, { mono: true }) + 14);
     if (x + w > maxX) return;
-    const glyph = icon3.path ? drawIcon(icon3, x + 12, y + 8, 14, { color: legible(icon3.hex, p.chipBg, p.text), inks: [p.panel, p.text] }) : `<circle cx="${n(x + 19, 2)}" cy="${y + 15}" r="4.5" fill="${legible(icon3.hex || lang2?.color || p.accentB, p.chipBg, p.text)}"/>`;
+    const glyph = icon3.path ? drawIcon(icon3, x + 12, y + 8, 14, { color: legible(icon3.hex, p.chipBg, p.text), inks: [p.panel, p.text] }) : icon3.monogram && icon3.known ? drawIcon(icon3, x + 11, y + 7, 16, { color: legible(icon3.hex, p.chipBg, p.text), inks: [p.panel, p.text] }) : `<circle cx="${n(x + 19, 2)}" cy="${y + 15}" r="4.5" fill="${dotColor(icon3.hex || lang2?.color, p.chipBg, p)}"/>`;
     out2.push(
       `<g class="up" ${delay(0.55 + i * 0.07)}><rect x="${n(x, 2)}" y="${y}" width="${w}" height="30" rx="15" fill="${p.chipBg}" stroke="${p.border}"/>${glyph}<text x="${n(x + 34, 2)}" y="${y + 19.5}" class="mono" font-size="13" fill="${p.text}">${esc(text)}</text></g>`
     );
@@ -3657,6 +3316,7 @@ function textColumn(c, colW, ctx, statusColor) {
   }).join("");
 }
 var PANEL = { x: 700, y: 52, w: 452, h: 300 };
+var CODE_COL_W = PANEL.x - 40 - X0;
 var CODE_SIZE = 14.5;
 var CHAR_W = CODE_SIZE * 0.6;
 var CODE_X = PANEL.x + 50;
@@ -3672,34 +3332,16 @@ function codePanel(lines, lang2, file, ctx) {
     const by = n(firstBase + i * lineH);
     const num = `<text x="${x + 34}" y="${by}" text-anchor="end" class="mono" font-size="12" fill="${p.faint}" fill-opacity=".7">${i + 1}</text>`;
     if (!line.trim()) return num;
-    let col = 0;
-    let pin = true;
-    const spans = [];
-    for (const t of tokenize(line, lang2)) {
-      const whole = t.kind === "string" || t.kind === "comment" || t.kind === "property";
-      const segs = whole ? [t.text.replace(/ /g, "\xA0")] : t.text.match(/\s+|\S+/g) ?? [];
-      for (const seg of segs) {
-        const len = [...seg].length;
-        if (!seg.trim()) pin = true;
-        else {
-          const at3 = pin ? ` x="${n(CODE_X + col * CHAR_W, 2)}"` : "";
-          spans.push(`<tspan${at3}${t.kind === "plain" ? "" : ` fill="${color(t.kind)}"`}>${esc(seg)}</tspan>`);
-          pin = false;
-        }
-        col += len;
-      }
-    }
-    return num + `<text class="mono h-code h-type" ${delay(0.55 + i * 0.3)} x="${CODE_X}" y="${by}" font-size="${CODE_SIZE}" fill="${p.text}">${spans.join("")}</text>`;
+    const spans = tokenize(line, lang2).map((t) => t.kind === "plain" ? esc(t.text) : `<tspan fill="${color(t.kind)}">${esc(t.text)}</tspan>`);
+    if (i === lines.length - 1) spans.push(`<tspan class="h-cur" dx="2" fill="${p.accentB}">\u2588</tspan>`);
+    return num + `<text class="mono h-code h-type" ${delay(0.55 + i * 0.3)} x="${CODE_X}" y="${by}" font-size="${CODE_SIZE}" fill="${p.text}" xml:space="preserve">${spans.join("")}</text>`;
   }).join("");
-  const lastIdx = Math.max(0, lines.length - 1);
-  const lastLen = [...lines[lastIdx] ?? ""].length;
-  const cursor = `<rect class="h-cur" x="${n(CODE_X + lastLen * CHAR_W + 3)}" y="${n(firstBase + lastIdx * lineH - 13)}" width="9" height="17" rx="1.5" fill="${p.accentB}"/>`;
   const fileIcon = resolveIcon(FILE_ICONS[lang2]);
   const fileName = fit(file, w - 160, 12.5, { mono: true });
   const fw = textWidth(fileName, 12.5, { mono: true });
   const fx = x + w / 2 - (fw + 20) / 2;
-  const glyph = fileIcon.path ? drawIcon(fileIcon, fx, y + 15, 13, { color: legible(fileIcon.hex, p.panelAlt, p.text), inks: [p.panel, p.text] }) : `<circle cx="${n(fx + 6.5, 2)}" cy="${y + 21.5}" r="4" fill="${legible(fileIcon.hex || p.accentB, p.panelAlt, p.text)}"/>`;
-  return `<g class="up" ${delay(0.3)}><rect x="${x}" y="${y}" width="${w}" height="${h}" rx="16" fill="${p.panel}" fill-opacity=".86" stroke="${p.border}"/><path d="M${x} ${y + 16}a16 16 0 0 1 16-16h${w - 32}a16 16 0 0 1 16 16v28H${x}z" fill="${p.panelAlt}" fill-opacity=".92"/><circle cx="${x + 22}" cy="${y + 22}" r="5.5" fill="#FF5F57"/><circle cx="${x + 40}" cy="${y + 22}" r="5.5" fill="#FEBC2E"/><circle cx="${x + 58}" cy="${y + 22}" r="5.5" fill="#28C840"/>` + glyph + `<text x="${n(fx + 20, 2)}" y="${y + 26}" class="mono" font-size="12.5" fill="${p.muted}">${esc(fileName)}</text><line x1="${x}" y1="${y + 44}" x2="${x + w}" y2="${y + 44}" stroke="${p.border}"/>` + body + cursor + "</g>";
+  const glyph = fileIcon.path ? drawIcon(fileIcon, fx, y + 15, 13, { color: legible(fileIcon.hex, p.panelAlt, p.text), inks: [p.panel, p.text] }) : fileIcon.monogram && fileIcon.known ? drawIcon(fileIcon, fx - 1, y + 14, 15, { color: legible(fileIcon.hex, p.panelAlt, p.text), inks: [p.panel, p.text] }) : `<circle cx="${n(fx + 6.5, 2)}" cy="${y + 21.5}" r="4" fill="${dotColor(fileIcon.hex, p.panelAlt, p)}"/>`;
+  return `<g class="up" ${delay(0.3)}><rect x="${x}" y="${y}" width="${w}" height="${h}" rx="16" fill="${p.panel}" fill-opacity=".86" stroke="${p.border}"/><path d="M${x} ${y + 16}a16 16 0 0 1 16-16h${w - 32}a16 16 0 0 1 16 16v28H${x}z" fill="${p.panelAlt}" fill-opacity=".92"/><circle cx="${x + 22}" cy="${y + 22}" r="5.5" fill="#FF5F57"/><circle cx="${x + 40}" cy="${y + 22}" r="5.5" fill="#FEBC2E"/><circle cx="${x + 58}" cy="${y + 22}" r="5.5" fill="#28C840"/>` + glyph + `<text x="${n(fx + 20, 2)}" y="${y + 26}" class="mono" font-size="12.5" fill="${p.muted}">${esc(fileName)}</text><line x1="${x}" y1="${y + 44}" x2="${x + w}" y2="${y + 44}" stroke="${p.border}"/>` + body + "</g>";
 }
 function activity(ctx) {
   const p = ctx.palette;
@@ -3727,7 +3369,7 @@ function activity(ctx) {
   const squaresEnd = right - textWidth("more", 11, { mono: true }) - 7;
   const squaresStart = squaresEnd - (5 * 11 + 4 * 3);
   const legend2 = ramp.map((c, i) => `<rect x="${n(squaresStart + i * 14, 2)}" y="${y0 - 31}" width="11" height="11" rx="2.5" fill="${c}"/>`).join("");
-  return `<g class="fade" ${delay(0.35)}>${label(x0, y0 - 21, `Last ${weeks} weeks`, p)}<text x="${n(squaresStart - 7, 2)}" y="${y0 - 21.5}" text-anchor="end" class="mono" font-size="11" fill="${p.faint}">less</text>${legend2}<text x="${right}" y="${y0 - 21.5}" text-anchor="end" class="mono" font-size="11" fill="${p.faint}">more</text></g>` + rects + `<text class="mono fade" ${delay(0.9)} x="${x0}" y="${y0 + gh + 30}" font-size="13" fill="${p.muted}">${esc(caption)}</text>`;
+  return `<g class="fade" ${delay(0.35)}>${label(x0, y0 - 21, `Last ${weeks} weeks`, p)}<text x="${n(squaresStart - 7, 2)}" y="${y0 - 21.5}" text-anchor="end" class="mono" font-size="11" fill="${p.muted}">less</text>${legend2}<text x="${right}" y="${y0 - 21.5}" text-anchor="end" class="mono" font-size="11" fill="${p.muted}">more</text></g>` + rects + `<text class="mono fade" ${delay(0.9)} x="${x0}" y="${y0 + gh + 30}" font-size="13" fill="${p.muted}">${esc(caption)}</text>`;
 }
 var TOKENS = ["accentA", "accentB", "success", "text", "muted"];
 function statusColorOf(value, p) {
@@ -3757,15 +3399,15 @@ var card4 = {
     const o = readOptions(ctx.options);
     const codeOpt = o.string("code", "auto");
     const showCode = !/^(none|false|off|hide)$/i.test(codeOpt.trim());
-    const colW = (showCode ? PANEL.x - 40 : 740) - X0;
+    const colW = showCode ? CODE_COL_W : 740 - X0;
     const c = content(ctx, colW);
     const langOpt = o.optionalString("codeLanguage");
     const lang2 = langOpt && langOpt.toLowerCase() !== "auto" && codeLanguageOf(langOpt) || detectLanguage(ctx.data);
     const file = o.string("codeFile", FILES[lang2]);
-    const lines = !showCode ? [] : codeOpt.trim().toLowerCase() === "auto" ? autoCode(factsFrom(ctx.data, c.name, ctx.now), lang2, MAX_CODE_CHARS) : customCode(codeOpt, MAX_CODE_CHARS);
+    const lines = !showCode ? [] : codeOpt.trim().toLowerCase() === "auto" ? autoCode(factsFrom(ctx.data, c.name, ctx.now, c.copy), lang2, MAX_CODE_CHARS) : customCode(codeOpt, MAX_CODE_CHARS);
     const statusColor = statusColorOf(o.optionalString("statusColor"), p);
     const defs = linearGradient("h-accent", p.accentA, p.accentB) + `<radialGradient id="h-orbA"><stop offset="0" stop-color="${p.accentA}" stop-opacity="${n(p.glowOpacity, 3)}"/><stop offset="1" stop-color="${p.accentA}" stop-opacity="0"/></radialGradient><radialGradient id="h-orbB"><stop offset="0" stop-color="${p.accentB}" stop-opacity="${n(p.glowOpacity, 3)}"/><stop offset="1" stop-color="${p.accentB}" stop-opacity="0"/></radialGradient><pattern id="h-grid" width="32" height="32" patternUnits="userSpaceOnUse"><path d="M32 0H0V32" fill="none" stroke="${p.grid}" stroke-opacity="${n(p.gridOpacity, 3)}"/></pattern><radialGradient id="h-fade" cx="0.3" cy="0.35" r="0.85"><stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient><mask id="h-mask"><rect width="${W2}" height="${H}" fill="url(#h-fade)"/></mask>`;
-    const style = ".h-orbA{animation:h-driftA 16s ease-in-out infinite alternate}.h-orbB{animation:h-driftB 19s ease-in-out infinite alternate}@keyframes h-driftA{to{transform:translate(140px,50px)}}@keyframes h-driftB{to{transform:translate(-160px,-40px)}}.h-scan{opacity:.5;animation:h-scan 6s ease-in-out infinite}@keyframes h-scan{0%,100%{opacity:0}50%{opacity:.9}}.h-pulse{animation:h-pulse 2.4s ease-in-out infinite}@keyframes h-pulse{50%{opacity:.35}}.h-ring{opacity:0;transform-box:fill-box;transform-origin:center;animation:h-ring 2.4s ease-out infinite}@keyframes h-ring{0%{opacity:.6;transform:scale(1)}100%{opacity:0;transform:scale(2.8)}}.h-type{animation:h-type .5s steps(20,end) backwards}@keyframes h-type{from{clip-path:inset(0 100% 0 0)}}.h-code{font-variant-ligatures:none}.h-cur{animation:h-blink 1.1s steps(1) infinite}@keyframes h-blink{50%{opacity:0}}.h-cell{transform-box:fill-box;transform-origin:center;animation:h-cell .45s ease-out backwards}@keyframes h-cell{from{opacity:0;transform:scale(.3)}}";
+    const style = ".h-orbA{animation:h-driftA 16s ease-in-out infinite alternate}.h-orbB{animation:h-driftB 19s ease-in-out infinite alternate}@keyframes h-driftA{to{transform:translate(140px,50px)}}@keyframes h-driftB{to{transform:translate(-160px,-40px)}}.h-scan{opacity:.5;animation:h-scan 6s ease-in-out infinite}@keyframes h-scan{0%,100%{opacity:0}50%{opacity:.9}}.h-pulse{animation:h-pulse 2.4s ease-in-out infinite}@keyframes h-pulse{50%{opacity:.35}}.h-ring{opacity:0;transform-box:fill-box;transform-origin:center;animation:h-ring 2.4s ease-out infinite}@keyframes h-ring{0%{opacity:.6;transform:scale(1)}100%{opacity:0;transform:scale(2.8)}}.h-type{animation:h-type .5s steps(20,end) backwards}@keyframes h-type{from{clip-path:inset(0 100% 0 0)}}.h-code{font-variant-ligatures:none;white-space:pre}.h-cur{animation:h-blink 1.1s steps(1) infinite}@keyframes h-blink{50%{fill-opacity:0}}.h-cell{transform-box:fill-box;transform-origin:center;animation:h-cell .45s ease-out backwards}@keyframes h-cell{from{opacity:0;transform:scale(.3)}}";
     const background = `<g clip-path="url(#ps-clip)"><rect width="${W2}" height="${H}" fill="${p.bg}"/><rect width="${W2}" height="${H}" fill="url(#h-grid)" mask="url(#h-mask)"/><circle class="h-orbA" cx="180" cy="40" r="320" fill="url(#h-orbA)"/><circle class="h-orbB" cx="1060" cy="380" r="340" fill="url(#h-orbB)"/><rect class="h-scan" width="${W2}" height="2" fill="url(#h-accent)"/></g>`;
     const body = background + textColumn(c, colW, ctx, statusColor) + (showCode ? codePanel(lines.length ? lines : ["// hello, world"], lang2, file, ctx) : activity(ctx));
     const title = `${c.name} \u2014 ${c.role}`;
@@ -3794,8 +3436,6 @@ var card4 = {
 
 // src/cards/repos.ts
 var NO_DESCRIPTION = "No description provided.";
-var LABEL_CHAR = 12 * 0.6 + 1.4;
-var HEX2 = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
 var SAFE = 0.95;
 function readSettings(ctx) {
   const o = readOptions(ctx.options);
@@ -3813,8 +3453,10 @@ function repoSlug(nameWithOwner) {
 }
 function selectRepos(data, limit) {
   const extra = data.extraRepos ?? [];
-  const pinned = data.pinned ?? [];
-  const source = extra.length ? extra : pinned.length ? pinned : (data.repos ?? []).filter((r) => !r.isArchived).sort((a, b) => b.stars - a.stars);
+  const profileRepo = `${data.login}/${data.login}`.toLowerCase();
+  const eligible = (r) => !r.isPrivate && r.nameWithOwner.toLowerCase() !== profileRepo;
+  const ranked = (data.repos ?? []).filter((r) => eligible(r) && !r.isArchived).sort((a, b) => b.stars - a.stars || (b.pushedAt > a.pushedAt ? 1 : b.pushedAt < a.pushedAt ? -1 : 0));
+  const source = extra.length ? extra : [...(data.pinned ?? []).filter(eligible), ...ranked];
   const seen = /* @__PURE__ */ new Set();
   const out2 = [];
   for (const repo2 of source) {
@@ -3826,59 +3468,9 @@ function selectRepos(data, limit) {
   }
   return out2;
 }
-var safeColor2 = (c, fallback) => c && HEX2.test(c.trim()) ? c.trim() : fallback;
 var validDate = (iso) => !!iso && Number.isFinite(Date.parse(iso));
-var chars = (s) => Array.from(s);
-var dropLast = (s) => chars(s).slice(0, -1).join("");
 var clean = (s) => (s ?? "").replace(/\s+/g, " ").trim();
-function readable(fg, bg, toward, min = 4.5) {
-  let out2 = fg;
-  for (let k = 0.15; contrast(out2, bg) < min && k <= 1; k += 0.15) out2 = mix(fg, toward, k);
-  return out2;
-}
-function wrapPx2(text, maxWidth, size, maxLines, opts = {}) {
-  const w = (s) => textWidth(s, size, opts);
-  const words2 = [];
-  for (const word of text.split(/\s+/).filter(Boolean)) {
-    if (w(word) <= maxWidth) {
-      words2.push(word);
-      continue;
-    }
-    let rest = chars(word);
-    while (rest.length) {
-      let cut = rest.length;
-      while (cut > 1 && w(rest.slice(0, cut).join("")) > maxWidth) cut--;
-      words2.push(rest.slice(0, cut).join(""));
-      rest = rest.slice(cut);
-    }
-  }
-  const lines = [];
-  let cur = "";
-  for (const word of words2) {
-    const next = cur ? `${cur} ${word}` : word;
-    if (!cur || w(next) <= maxWidth) cur = next;
-    else {
-      lines.push(cur);
-      cur = word;
-      if (lines.length > maxLines) break;
-    }
-  }
-  if (cur && lines.length <= maxLines) lines.push(cur);
-  if (lines.length <= maxLines) return lines;
-  const kept = lines.slice(0, maxLines);
-  let last = (kept[maxLines - 1] ?? "").replace(/[\s.,;:!?-]+$/, "");
-  while (last && w(`${last}\u2026`) > maxWidth) {
-    const sp = last.lastIndexOf(" ");
-    last = (sp > 0 ? last.slice(0, sp) : dropLast(last)).replace(/[\s.,;:!?-]+$/, "");
-  }
-  kept[maxLines - 1] = `${last}\u2026`;
-  return kept;
-}
-function fitLabel2(s, maxWidth) {
-  const max = Math.max(1, Math.floor(maxWidth / LABEL_CHAR));
-  const c = chars(s);
-  return c.length <= max ? s : `${c.slice(0, Math.max(1, max - 1)).join("").trimEnd()}\u2026`;
-}
+var dataColor = (c, p) => ensureContrast(safeColor(c, p.faint), p.panel, 1.8, p.text);
 var norm = (s) => s.toLowerCase().replace(/#/g, "sharp").replace(/\+/g, "p").replace(/[^a-z0-9]/g, "");
 function primaryLanguage(repo2) {
   if (repo2.primaryLanguage?.name) return repo2.primaryLanguage;
@@ -3888,11 +3480,12 @@ function primaryLanguage(repo2) {
 function categoryLabel(repo2, maxWidth, maxParts = 2) {
   const lang2 = primaryLanguage(repo2)?.name;
   const candidates = [];
-  if (lang2) candidates.push(lang2);
+  if (lang2) candidates.push(displayName(lang2));
   const langKey = lang2 ? norm(lang2) : "";
+  const shortKey = lang2 ? norm(displayName(lang2)) : "";
   for (const topic of repo2.topics ?? []) {
     const key = norm(topic);
-    if (!key || key === langKey || key === `${langKey}lang` || candidates.some((c) => norm(c) === key)) continue;
+    if (!key || key === langKey || key === shortKey || key === `${langKey}lang` || candidates.some((c) => norm(c) === key)) continue;
     candidates.push(topic);
   }
   if (!candidates.length) return "REPOSITORY";
@@ -3900,10 +3493,10 @@ function categoryLabel(repo2, maxWidth, maxParts = 2) {
   for (const c of candidates) {
     if (parts2.length >= maxParts) break;
     const next = [...parts2, c].join(" \xB7 ").toUpperCase();
-    if (parts2.length && chars(next).length * LABEL_CHAR > maxWidth) break;
+    if (parts2.length && labelWidth(next) > maxWidth) break;
     parts2.push(c);
   }
-  return fitLabel2(parts2.join(" \xB7 ").toUpperCase(), maxWidth);
+  return fitLabel(parts2.join(" \xB7 ").toUpperCase(), maxWidth);
 }
 function ownerShown(repo2, data, s) {
   const foreign = repo2.owner.toLowerCase() !== (data.login ?? "").toLowerCase();
@@ -4009,7 +3602,7 @@ function compactCard(ctx, repo2, s) {
     );
   }
   const labelMax = W5 - 2 * P - (badgeW ? badgeW + 14 : 0);
-  const category = s.title ? fitLabel2(s.title.toUpperCase(), labelMax) : categoryLabel(repo2, labelMax);
+  const category = s.title ? fitLabel(s.title.toUpperCase(), labelMax) : categoryLabel(repo2, labelMax);
   out2.push(`<g class="fade">${label(P, 40, category, p)}${badgeSvg}</g>`);
   const title = titleText(repo2, ownerShown(repo2, ctx.data, s), (W5 - 2 * P) * SAFE, 20, 700, p, "/");
   out2.push(
@@ -4017,7 +3610,7 @@ function compactCard(ctx, repo2, s) {
   );
   const desc = clean(repo2.description);
   if (desc) {
-    const rows = wrapPx2(desc, (W5 - 2 * P) * SAFE, 13.5, lines);
+    const rows = wrapPx(desc, (W5 - 2 * P) * SAFE, 13.5, {}, lines);
     out2.push(
       `<g class="up" ${delay(0.12)}>` + rows.map(
         (row, i) => `<text x="${P}" y="${descTop + i * lh}" class="sans" font-size="13.5" fill="${p.muted}">${esc(row)}</text>`
@@ -4035,9 +3628,9 @@ function compactCard(ctx, repo2, s) {
   let x = P;
   const lang2 = primaryLanguage(repo2);
   if (lang2) {
-    const name = fit(lang2.name, 118, 12.5, mono);
+    const name = fit(displayName(lang2.name), 118, 12.5, mono);
     foot.push(
-      `<circle cx="${x + 6}" cy="${cy}" r="5.5" fill="${safeColor2(lang2.color, p.faint)}"/><text x="${x + 18}" y="${n(base)}" class="mono" font-size="12.5" fill="${p.text}">${esc(name)}</text>`
+      `<circle cx="${x + 6}" cy="${cy}" r="5.5" fill="${dataColor(lang2.color, p)}"/><text x="${x + 18}" y="${n(base)}" class="mono" font-size="12.5" fill="${p.text}">${esc(name)}</text>`
     );
     x += 18 + textWidth(name, 12.5, mono) + 18;
   }
@@ -4056,7 +3649,7 @@ function compactCard(ctx, repo2, s) {
     const agoW = textWidth(ago, 12, mono);
     if (x + agoW + 18 <= W5 - P) {
       foot.push(
-        icon("clock", W5 - P - agoW - 10, cy, p.faint, 0.72, 1.7) + `<text x="${W5 - P}" y="${n(base)}" text-anchor="end" class="mono" font-size="12" fill="${p.faint}">${esc(ago)}</text>`
+        icon("clock", W5 - P - agoW - 10, cy, p.muted, 0.72, 1.7) + `<text x="${W5 - P}" y="${n(base)}" text-anchor="end" class="mono" font-size="12" fill="${p.muted}">${esc(ago)}</text>`
       );
     }
   }
@@ -4083,9 +3676,9 @@ function languageSlices(repo2, p) {
     langs2 = [{ name: primary.name, color: primary.color, value: 1 }];
   }
   const sorted = [...langs2].sort((a, b) => b.value - a.value);
-  const top = sorted.slice(0, 5).map((l) => ({ name: l.name, color: safeColor2(l.color, p.faint), value: l.value }));
+  const top = sorted.slice(0, 5).map((l) => ({ name: l.name, color: dataColor(l.color, p), value: l.value }));
   const rest = sorted.slice(5).reduce((sum, l) => sum + l.value, 0);
-  if (rest > 0) top.push({ name: "Other", color: p.faint, value: rest });
+  if (rest > 0) top.push({ name: "Other", color: otherColor(p, top.map((l) => l.color)), value: rest });
   return top;
 }
 function detailCard(ctx, repo2, s) {
@@ -4112,7 +3705,7 @@ function detailCard(ctx, repo2, s) {
     right -= 8;
   }
   const labelMax = right - P - 24;
-  const category = s.title ? fitLabel2(s.title.toUpperCase(), labelMax) : categoryLabel(repo2, labelMax, 3);
+  const category = s.title ? fitLabel(s.title.toUpperCase(), labelMax) : categoryLabel(repo2, labelMax, 3);
   out2.push(`<g class="fade">${label(P, 58, category, p)}${chips2.join("")}</g>`);
   const title = titleText(repo2, ownerShown(repo2, ctx.data, s), CW * SAFE, 40, 800, p, " / ");
   out2.push(
@@ -4121,7 +3714,7 @@ function detailCard(ctx, repo2, s) {
   const descY = 156;
   const descLh = 28;
   const desc = clean(repo2.description);
-  const rows = desc ? wrapPx2(desc, CW * SAFE, 18, s.descriptionLines) : [];
+  const rows = desc ? wrapPx(desc, CW * SAFE, 18, {}, s.descriptionLines) : [];
   if (rows.length) {
     out2.push(
       `<g class="up" ${delay(0.12)}>` + rows.map((row, i) => `<text x="${P}" y="${descY + i * descLh}" class="sans" font-size="18" fill="${p.muted}">${esc(row)}</text>`).join("") + "</g>"
@@ -4141,7 +3734,7 @@ function detailCard(ctx, repo2, s) {
     meta.push({
       icon: "tag",
       color: p.accentB,
-      spans: `<tspan fill="${p.text}" font-weight="600">${esc(t)}</tspan><tspan fill="${p.faint}">${esc(when)}</tspan>`,
+      spans: `<tspan fill="${p.text}" font-weight="600">${esc(t)}</tspan><tspan fill="${p.muted}">${esc(when)}</tspan>`,
       width: textWidth(t + when, 13, mono)
     });
   }
@@ -4158,7 +3751,7 @@ function detailCard(ctx, repo2, s) {
   const home = /^https?:\/\/[^\s/]/i.test(homepage) ? homepage.replace(/^https?:\/\/(www\.)?/i, "").replace(/[?#].*$/, "").replace(/\/+$/, "") : "";
   if (home) {
     const t = fit(home, 260, 13, mono);
-    const color = readable(p.accentB, p.panel, p.text, 3.5);
+    const color = ensureContrast(p.accentB, p.panel, 3.5, p.text);
     meta.push({ icon: "globe", color, spans: `<tspan fill="${color}">${esc(t)}</tspan>`, width: textWidth(t, 13, mono) });
   }
   let mx = P;
@@ -4185,7 +3778,7 @@ function detailCard(ctx, repo2, s) {
     const tx = P + i * (tileW + gap);
     const v = compact(Math.max(0, value || 0));
     out2.push(
-      `<g class="up" ${delay(0.22 + i * 0.06)}><rect x="${n(tx)}" y="${y}" width="${n(tileW)}" height="${tileH}" rx="14" fill="${p.panelAlt}" stroke="${p.border}"/>` + icon(kind, tx + 28, y + 30, p.accentB, 1, 1.5) + `<text x="${n(tx + 46)}" y="${y + 34.5}" class="mono" font-size="12" letter-spacing="1" fill="${p.faint}">${esc(name.toUpperCase())}</text><text x="${n(tx + 20)}" y="${y + 74}" class="sans" font-size="30" font-weight="800" letter-spacing="-.8" fill="${p.text}">${esc(v)}</text></g>`
+      `<g class="up" ${delay(0.22 + i * 0.06)}><rect x="${n(tx)}" y="${y}" width="${n(tileW)}" height="${tileH}" rx="14" fill="${p.panelAlt}" stroke="${p.border}"/>` + icon(kind, tx + 28, y + 30, p.accentB, 1, 1.5) + `<text x="${n(tx + 46)}" y="${y + 34.5}" class="mono" font-size="12" letter-spacing="1" fill="${p.muted}">${esc(name.toUpperCase())}</text><text x="${n(tx + 20)}" y="${y + 74}" class="sans" font-size="30" font-weight="800" letter-spacing="-.8" fill="${p.text}">${esc(v)}</text></g>`
     );
   });
   y += tileH;
@@ -4197,7 +3790,7 @@ function detailCard(ctx, repo2, s) {
     const barY = y + 16;
     const barH = 10;
     out2.push(
-      `<text x="${P}" y="${y}" class="mono" font-size="12" letter-spacing="1.2" fill="${p.faint}">LANGUAGES</text><rect x="${P}" y="${barY}" width="${CW}" height="${barH}" rx="${barH / 2}" fill="${p.empty}"/>`
+      `<text x="${P}" y="${y}" class="mono" font-size="12" letter-spacing="1.2" fill="${p.muted}">LANGUAGES</text><rect x="${P}" y="${barY}" width="${CW}" height="${barH}" rx="${barH / 2}" fill="${p.empty}"/>`
     );
     defs += `<clipPath id="rp-lang"><rect x="${P}" y="${barY}" width="${CW}" height="${barH}" rx="${barH / 2}"/></clipPath>`;
     let bx = P;
@@ -4230,13 +3823,13 @@ function detailCard(ctx, repo2, s) {
   const topics = (repo2.topics ?? []).map(clean).filter(Boolean);
   if (topics.length) {
     y += 46;
-    out2.push(`<text x="${P}" y="${y}" class="mono" font-size="12" letter-spacing="1.2" fill="${p.faint}">TOPICS</text>`);
+    out2.push(`<text x="${P}" y="${y}" class="mono" font-size="12" letter-spacing="1.2" fill="${p.muted}">TOPICS</text>`);
     const chipY = y + 14;
     const chipH = 28;
     const chipGap = 8;
     const chipFill = mix(p.panel, p.accentB, 0.1);
     const chipStroke = mix(p.panel, p.accentB, 0.28);
-    const chipText = readable(p.accentB, chipFill, p.text);
+    const chipText = ensureContrast(p.accentB, chipFill, 4.5, p.text);
     const widths = topics.map((t) => {
       const text = fit(t, 300, 12.5, mono);
       return { text, w: textWidth(text, 12.5, mono) + 26 };
@@ -4292,12 +3885,12 @@ function placeholder(ctx, s) {
   let H3;
   if (!detail) {
     H3 = 200;
-    out2.push(`<g class="fade">${label(P, 40, s.title ? fitLabel2(s.title.toUpperCase(), W5 - 2 * P) : "Repositories", p)}</g>`);
+    out2.push(`<g class="fade">${label(P, 40, s.title ? fitLabel(s.title.toUpperCase(), W5 - 2 * P) : "Repositories", p)}</g>`);
     out2.push(
       `<g class="up" ${delay(0.05)}><circle cx="${P + 24}" cy="96" r="24" fill="${p.chipBg}" stroke="${p.border}"/>${icon("book", P + 24, 96, p.accentB, 1.3, 1.5)}</g>`
     );
     const tx = P + 64;
-    const rows = wrapPx2(message, (W5 - P - tx) * SAFE, 13, 3);
+    const rows = wrapPx(message, (W5 - P - tx) * SAFE, 13, {}, 3);
     out2.push(
       `<g class="up" ${delay(0.12)}><text x="${tx}" y="82" class="sans" font-size="17" font-weight="700" letter-spacing="-.2" fill="${p.text}">${heading}</text>` + rows.map((r, i) => `<text x="${tx}" y="${104 + i * 19}" class="sans" font-size="13" fill="${p.muted}">${esc(r)}</text>`).join("") + "</g>"
     );
@@ -4305,7 +3898,7 @@ function placeholder(ctx, s) {
       `<g class="fade" ${delay(0.2)}><line x1="${P}" y1="164" x2="${W5 - P}" y2="164" stroke="${p.border}"/><circle cx="${P + 6}" cy="182" r="5.5" fill="${skeleton}"/><rect x="${P + 18}" y="177" width="64" height="10" rx="5" fill="${skeleton}"/><rect x="${P + 100}" y="177" width="36" height="10" rx="5" fill="${skeleton}"/><rect x="${P + 152}" y="177" width="28" height="10" rx="5" fill="${skeleton}"/></g>`
     );
   } else {
-    out2.push(`<g class="fade">${label(P, 58, s.title ? fitLabel2(s.title.toUpperCase(), W5 - 2 * P) : "Repository", p)}</g>`);
+    out2.push(`<g class="fade">${label(P, 58, s.title ? fitLabel(s.title.toUpperCase(), W5 - 2 * P) : "Repository", p)}</g>`);
     out2.push(
       `<g class="up" ${delay(0.05)}><circle cx="${P + 32}" cy="122" r="32" fill="${p.chipBg}" stroke="${p.border}"/>${icon("book", P + 32, 122, p.accentB, 1.8, 1.4)}</g>`
     );
@@ -4474,7 +4067,7 @@ var ORDER_AUTO_FIRST = ["github"];
 var ORDER_AUTO_LAST = ["x", "website"];
 var platformKey = (key) => {
   const slug = slugify(key);
-  return KEY_ALIASES[slug] ?? slug;
+  return own(KEY_ALIASES, slug) ?? slug;
 };
 function safeUrl(value) {
   const v = value.trim();
@@ -4483,7 +4076,7 @@ function safeUrl(value) {
   if (/^mailto:[^@]+@[^@]+\.[^@]+$/i.test(v)) return v;
   return /^[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,}(:\d+)?([/?#].*)?$/i.test(v) ? `https://${v}` : null;
 }
-var EMAIL = /^[^@\s/]+@[^@\s/]+\.[^@\s/]+$/;
+var EMAIL = /^[^@\s/"'<>`]+@[^@\s/"'<>`]+\.[^@\s/"'<>`]+$/;
 function hostOf(url) {
   const m = /^https?:\/\/([^/?#:]+)/i.exec(url);
   return (m?.[1] ?? "").toLowerCase().replace(/^www\./, "");
@@ -4522,10 +4115,10 @@ function buildLink(rawKey, rawValue) {
     const url = safeUrl(value);
     if (!url) return null;
     const host = hostOf(url);
-    const p = PLATFORMS[key];
+    const p = own(PLATFORMS, key);
     return { key, label: key === "website" ? host || p.label : p.label, url, icon: resolveIcon(p.icon), handle: host || void 0 };
   }
-  const platform = PLATFORMS[key];
+  const platform = own(PLATFORMS, key);
   if (!platform) {
     return customLink(rawKey, value);
   }
@@ -4550,8 +4143,8 @@ function customLink(label2, value, iconName) {
   const url = safeUrl(EMAIL.test(bare) ? `mailto:${bare}` : value);
   if (!url) return null;
   const detected = url.startsWith("mailto:") ? "email" : detect(url);
-  const icon3 = iconName ? resolveIcon(iconName) : detected ? resolveIcon(PLATFORMS[detected]?.icon ?? detected) : resolveIcon("link");
-  const text = label2.trim() || (detected ? PLATFORMS[detected]?.label ?? hostOf(url) : hostOf(url)) || "Link";
+  const icon3 = iconName ? resolveIcon(iconName) : detected ? resolveIcon(own(PLATFORMS, detected)?.icon ?? detected) : resolveIcon("link");
+  const text = label2.trim() || (detected ? own(PLATFORMS, detected)?.label ?? hostOf(url) : hostOf(url)) || "Link";
   return { key: slugify(text) || "link", label: text, url, icon: icon3 };
 }
 function fromObject(entry) {
@@ -4707,6 +4300,7 @@ var card6 = {
 // src/cards/stack.ts
 var W3 = 1200;
 var PAD3 = 40;
+var HEADER_Y = 56;
 var MAX_ICONS = 48;
 function parseItem(entry) {
   const i = entry.indexOf(":");
@@ -4714,7 +4308,7 @@ function parseItem(entry) {
   const custom = i > 0 ? entry.slice(i + 1).trim() : "";
   if (!key) return null;
   const icon3 = resolveIcon(key);
-  return { icon: icon3, label: custom || icon3.title };
+  return { icon: icon3, label: custom || displayName(icon3.title) };
 }
 function defaultStack(data, limit = 8) {
   const out2 = [];
@@ -4823,7 +4417,7 @@ function chips(list, top, ctx) {
 function emptyState(top, p) {
   const h = 112;
   return {
-    body: `<g class="fade"><rect x="${PAD3 + 0.5}" y="${top + 0.5}" width="${W3 - PAD3 * 2 - 1}" height="${h - 1}" rx="14" fill="${p.panelAlt}" fill-opacity=".6" stroke="${p.faint}" stroke-opacity=".45" stroke-dasharray="5 5"/><text x="${W3 / 2}" y="${top + 50}" text-anchor="middle" class="sans" font-size="16" font-weight="600" fill="${p.muted}">No tech stack to show yet</text><text x="${W3 / 2}" y="${top + 76}" text-anchor="middle" class="mono" font-size="12.5" fill="${p.faint}">Pick icons with the "icons" option, e.g. typescript, docker, postgres</text></g>`,
+    body: `<g class="fade"><rect x="${PAD3 + 0.5}" y="${top + 0.5}" width="${W3 - PAD3 * 2 - 1}" height="${h - 1}" rx="14" fill="${p.panelAlt}" fill-opacity=".6" stroke="${p.faint}" stroke-opacity=".45" stroke-dasharray="5 5"/><text x="${W3 / 2}" y="${top + 50}" text-anchor="middle" class="sans" font-size="16" font-weight="600" fill="${p.muted}">No tech stack to show yet</text><text x="${W3 / 2}" y="${top + 76}" text-anchor="middle" class="mono" font-size="12.5" fill="${p.muted}">Pick icons with the "icons" option, e.g. typescript, docker, postgres</text></g>`,
     defs: "",
     height: h
   };
@@ -4852,10 +4446,12 @@ var card7 = {
     const perRow = Math.round(o.number("perRow", 8, { min: 3, max: 12 }));
     const title = o.string("title", "Tech stack");
     const hideTitle = o.boolean("hideTitle", false);
-    const top = hideTitle ? PAD3 : 78;
+    const top = hideTitle ? PAD3 : 80;
     const layout2 = !list.length ? emptyState(top, p) : style === "chips" ? chips(list, top, ctx) : tiles(list, top, perRow, ctx);
     const height = Math.round(top + layout2.height + PAD3);
-    const header2 = hideTitle ? "" : `<g class="fade">${label(PAD3, 50, fit(title, 760, 12, { mono: true }), p)}` + (list.length ? label(W3 - PAD3, 50, `${list.length} ${plural(list.length, "technology", "technologies")}`, p, { anchor: "end", color: p.faint }) : "") + "</g>";
+    const countText = list.length ? `${list.length} ${plural(list.length, "technology", "technologies")}` : "";
+    const titleRoom = W3 - PAD3 * 2 - (countText ? labelWidth(countText) + 32 : 0);
+    const header2 = hideTitle ? "" : `<g class="fade">${label(PAD3, HEADER_Y, fitLabel(title, titleRoom), p)}` + (countText ? label(W3 - PAD3, HEADER_Y, countText, p, { anchor: "end", color: p.muted }) : "") + "</g>";
     const names = list.map((i) => i.label);
     const alt = names.length ? `${title}: ${names.join(", ")}` : `${title}: nothing to show yet`;
     return [
@@ -4931,7 +4527,7 @@ var LOOKUP = {
 function parseMetrics(input) {
   const out2 = [];
   for (const raw of input) {
-    const key = LOOKUP[normalize(raw)];
+    const key = own(LOOKUP, normalize(raw));
     if (key && !out2.includes(key)) out2.push(key);
   }
   return out2.slice(0, MAX_METRICS);
@@ -4940,16 +4536,9 @@ var safe = (v) => typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0;
 function computeFacts(data, now) {
   const today = isoDate(now);
   const calendar = (Array.isArray(data.calendar) ? data.calendar : []).filter((d) => d && typeof d.date === "string" && d.date.slice(0, 10) <= today).map((d) => ({ date: d.date.slice(0, 10), count: safe(d.count) }));
-  const counts = countsByDate(calendar);
-  const end = parseDate(today).getTime();
-  const lastDays = (len) => Array.from({ length: len }, (_, i) => {
-    const date = isoDate(new Date(end - (len - 1 - i) * DAY2));
-    return { date, count: counts.get(date) ?? 0 };
-  });
-  const year = lastDays(365);
-  const rolling = year.slice(1);
+  const year = lastYear(calendar, now);
+  const rolling = year.slice(-364);
   const weeks = Array.from({ length: 52 }, (_, w) => rolling.slice(w * 7, w * 7 + 7).reduce((s, d) => s + d.count, 0));
-  const yearSum = year.reduce((s, d) => s + d.count, 0);
   let bestDay = { count: 0, date: null };
   for (const d of year) if (d.count > bestDay.count) bestDay = { count: d.count, date: d.date };
   const { current, longest } = streaks(calendar, now);
@@ -4963,7 +4552,7 @@ function computeFacts(data, now) {
   const since = allTime > 0 ? [createdYear, firstYear].filter(Boolean).sort().pop() ?? null : null;
   const y = data.year;
   return {
-    yearTotal: safe(y?.contributions) || yearSum,
+    yearTotal: yearTotal({ calendar, year: y }, now),
     current,
     longest,
     allTime,
@@ -5044,31 +4633,16 @@ function icon2(name, x, y, size, color) {
   if (!d) return "";
   return `<path transform="translate(${n(x)} ${n(y)}) scale(${n(size / 16, 3)})" d="${d}" fill="none" stroke="${color}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>`;
 }
-var headerWidth2 = (s) => [...s].length * (12 * 0.6 + 1.4);
-function fitHeader2(s, maxWidth) {
-  if (headerWidth2(s) <= maxWidth) return s;
-  let out2 = s;
-  while (out2.length > 1 && headerWidth2(`${out2}\u2026`) > maxWidth) out2 = out2.slice(0, -1);
-  return `${out2.trimEnd()}\u2026`;
-}
-var tileLabelWidth = (s) => [...s].length * (LABEL_SIZE * 0.6 + LABEL_SPACING);
-function fitTileLabel(s, maxWidth) {
-  if (tileLabelWidth(s) <= maxWidth) return s;
-  let out2 = s;
-  while (out2.length > 1 && tileLabelWidth(`${out2}\u2026`) > maxWidth) out2 = out2.slice(0, -1);
-  return `${out2.trimEnd()}\u2026`;
-}
-var at2 = (seconds) => `style="animation-delay:${n(seconds, 3)}s"`;
 function tileSvg(t, x, y, w, p, index) {
   const inner = w - 32;
-  const labelText = fitTileLabel(t.label.toUpperCase(), inner - 21);
+  const labelText = fitLabel(t.label.toUpperCase(), inner - 21, { size: LABEL_SIZE, spacing: LABEL_SPACING });
   const unitW = t.unit ? textWidth(t.unit, 13) + 6 : 0;
   let size = 26;
   const valueW = (s) => textWidth(t.value, s, { weight: 700 }) - 0.5 * t.value.length;
   while (size > 18 && valueW(size) + unitW > inner) size--;
   const unit = t.unit && valueW(size) + unitW > inner ? fit(t.unit, Math.max(0, inner - valueW(size) - 6), 13) : t.unit;
   const unitSvg = unit ? `<tspan dx="6" font-size="13" fill="${p.muted}">${esc(unit)}</tspan>` : "";
-  return `<g class="up" ${at2(0.12 + index * 0.05)}><rect x="${n(x)}" y="${n(y)}" width="${n(w)}" height="${TILE_H}" rx="12" fill="${p.panelAlt}" stroke="${p.border}"/>` + icon2(t.icon, x + 16, y + 15, 14, p.accentB) + `<text x="${n(x + 37)}" y="${n(y + 26.5)}" class="mono" font-size="${LABEL_SIZE}" letter-spacing="${LABEL_SPACING}" fill="${mix(p.faint, p.muted, 0.45)}">${esc(labelText)}</text><text x="${n(x + 16)}" y="${n(y + 58)}" class="sans"><tspan font-size="${size}" font-weight="700" letter-spacing="-.5" fill="${p.text}">${esc(t.value)}</tspan>${unitSvg}</text></g>`;
+  return `<g class="up" ${delay(0.12 + index * 0.05)}><rect x="${n(x)}" y="${n(y)}" width="${n(w)}" height="${TILE_H}" rx="12" fill="${p.panelAlt}" stroke="${p.border}"/>` + icon2(t.icon, x + 16, y + 15, 14, p.accentB) + `<text x="${n(x + 37)}" y="${n(y + 26.5)}" class="mono" font-size="${LABEL_SIZE}" letter-spacing="${LABEL_SPACING}" fill="${p.muted}">${esc(labelText)}</text><text x="${n(x + 16)}" y="${n(y + 58)}" class="sans"><tspan font-size="${size}" font-weight="700" letter-spacing="-.5" fill="${p.text}">${esc(t.value)}</tspan>${unitSvg}</text></g>`;
 }
 function tileGrid(tiles2, x, y, width, p) {
   if (!tiles2.length) return { svg: "", height: 0 };
@@ -5089,7 +4663,7 @@ function hero(total, x, baseline, maxWidth, p) {
   const unitW = textWidth(unit, 18) + 12;
   while (size > 36 && numberW(size) + unitW > maxWidth) size -= 2;
   const defs = `<linearGradient id="st-hero" gradientUnits="userSpaceOnUse" x1="${n(x)}" y1="0" x2="${n(x + Math.max(40, numberW(size)))}" y2="0"><stop offset="0" stop-color="${p.accentA}"/><stop offset="1" stop-color="${p.accentB}"/></linearGradient>`;
-  const svg = `<text x="${n(x)}" y="${n(baseline)}" class="sans up" ${at2(0.05)}><tspan font-size="${size}" font-weight="800" letter-spacing="-2" fill="url(#st-hero)">${esc(text)}</tspan><tspan dx="12" font-size="18" fill="${p.muted}">${esc(unit)}</tspan></text>`;
+  const svg = `<text x="${n(x)}" y="${n(baseline)}" class="sans up" ${delay(0.05)}><tspan font-size="${size}" font-weight="800" letter-spacing="-2" fill="url(#st-hero)">${esc(text)}</tspan><tspan dx="12" font-size="18" fill="${p.muted}">${esc(unit)}</tspan></text>`;
   return { svg, defs };
 }
 function weeklyChart(f, box, ctx) {
@@ -5104,7 +4678,7 @@ function weeklyChart(f, box, ctx) {
   const rx = Math.min(3, bw / 2);
   const parts2 = [];
   if (box.headerY !== null) {
-    parts2.push(label(x0, box.headerY, "Weekly contributions", p, { color: p.faint }));
+    parts2.push(label(x0, box.headerY, "Weekly contributions", p, { color: p.muted }));
   }
   if (peak > 0) {
     for (const k of [0.5, 1]) {
@@ -5121,7 +4695,7 @@ function weeklyChart(f, box, ctx) {
     }
     const h = Math.max(4, v / peak * bh);
     parts2.push(
-      `<rect class="st-bar" ${at2(0.25 + i * 0.012)} x="${n(x)}" y="${n(bottom - h)}" width="${n(bw)}" height="${n(h)}" rx="${n(rx)}" fill="url(#st-bars)"/>`
+      `<rect class="st-bar" ${delay(0.25 + i * 0.012)} x="${n(x)}" y="${n(bottom - h)}" width="${n(bw)}" height="${n(h)}" rx="${n(rx)}" fill="url(#st-bars)"/>`
     );
   });
   if (peak > 0) {
@@ -5131,25 +4705,25 @@ function weeklyChart(f, box, ctx) {
     const lw = 22 + textWidth(avgText, 11.5, { mono: true });
     const lx = x0 + (cw - lw) / 2;
     parts2.push(
-      `<line class="fade" ${at2(0.9)} x1="${n(x0)}" y1="${n(avgY)}" x2="${n(x0 + cw)}" y2="${n(avgY)}" stroke="${p.muted}" stroke-opacity=".7" stroke-dasharray="3 4"/>`,
-      `<g class="fade" ${at2(0.9)}><line x1="${n(lx)}" y1="${n(box.axisY - 4)}" x2="${n(lx + 14)}" y2="${n(box.axisY - 4)}" stroke="${p.muted}" stroke-dasharray="3 3"/><text x="${n(lx + 22)}" y="${n(box.axisY)}" class="mono" font-size="11.5" fill="${p.faint}">${esc(avgText)}</text></g>`
+      `<line class="fade" ${delay(0.9)} x1="${n(x0)}" y1="${n(avgY)}" x2="${n(x0 + cw)}" y2="${n(avgY)}" stroke="${p.muted}" stroke-opacity=".7" stroke-dasharray="3 4"/>`,
+      `<g class="fade" ${delay(0.9)}><line x1="${n(lx)}" y1="${n(box.axisY - 4)}" x2="${n(lx + 14)}" y2="${n(box.axisY - 4)}" stroke="${p.muted}" stroke-dasharray="3 3"/><text x="${n(lx + 22)}" y="${n(box.axisY)}" class="mono" font-size="11.5" fill="${p.muted}">${esc(avgText)}</text></g>`
     );
     const pi = weeks.indexOf(peak);
     const peakText = `peak ${compact(peak)}`;
     const pw = textWidth(peakText, 11, { mono: true });
     const pcx = Math.min(x0 + cw - pw / 2, Math.max(x0 + pw / 2, x0 + pi * step + step / 2));
     parts2.push(
-      `<text class="mono fade" ${at2(0.9)} x="${n(pcx)}" y="${n(top - 8)}" text-anchor="middle" font-size="11" fill="${p.muted}">${esc(peakText)}</text>`
+      `<text class="mono fade" ${delay(0.9)} x="${n(pcx)}" y="${n(top - 8)}" text-anchor="middle" font-size="11" fill="${p.muted}">${esc(peakText)}</text>`
     );
   } else {
     const cy = top + bh / 2;
     parts2.push(
-      `<g class="fade" ${at2(0.3)}><text x="${n(x0 + cw / 2)}" y="${n(cy - 4)}" text-anchor="middle" class="sans" font-size="16" font-weight="600" fill="${p.text}">No contributions yet</text><text x="${n(x0 + cw / 2)}" y="${n(cy + 18)}" text-anchor="middle" class="sans" font-size="13" fill="${p.muted}">Each week of activity will rise here as a bar.</text></g>`
+      `<g class="fade" ${delay(0.3)}><text x="${n(x0 + cw / 2)}" y="${n(cy - 4)}" text-anchor="middle" class="sans" font-size="16" font-weight="600" fill="${p.text}">No contributions yet</text><text x="${n(x0 + cw / 2)}" y="${n(cy + 18)}" text-anchor="middle" class="sans" font-size="13" fill="${p.muted}">Each week of activity will rise here as a bar.</text></g>`
     );
   }
   parts2.push(
-    `<text x="${n(x0)}" y="${n(box.axisY)}" class="mono" font-size="11.5" fill="${p.faint}">${esc(monthYear(f.weeksStart))}</text>`,
-    `<text x="${n(x0 + cw)}" y="${n(box.axisY)}" text-anchor="end" class="mono" font-size="11.5" fill="${p.faint}">now</text>`
+    `<text x="${n(x0)}" y="${n(box.axisY)}" class="mono" font-size="11.5" fill="${p.muted}">${esc(monthYear(f.weeksStart))}</text>`,
+    `<text x="${n(x0 + cw)}" y="${n(box.axisY)}" text-anchor="end" class="mono" font-size="11.5" fill="${p.muted}">now</text>`
   );
   return { svg: parts2.join(""), defs };
 }
@@ -5172,7 +4746,7 @@ function render2(ctx) {
     const leftW = 504;
     const dividerX = PAD4 + leftW + 40;
     const chartX = dividerX + 40;
-    if (showTitle) parts2.push(label(PAD4, 56, fitHeader2(title, leftW), p));
+    if (showTitle) parts2.push(label(PAD4, 56, fitLabel(title, leftW), p));
     const h = hero(facts.yearTotal, PAD4, heroBaseline, leftW, p);
     defs.push(h.defs);
     parts2.push(h.svg);
@@ -5196,7 +4770,7 @@ function render2(ctx) {
     const contentH = Math.max(heroBlock + 14, gridH);
     H3 = PAD4 * 2 + contentH;
     const blockTop = PAD4 + (contentH - heroBlock) / 2 - 4;
-    if (showTitle) parts2.push(label(PAD4, blockTop + 12, fitHeader2(title, leftW), p));
+    if (showTitle) parts2.push(label(PAD4, blockTop + 12, fitLabel(title, leftW), p));
     const h = hero(facts.yearTotal, PAD4, blockTop + heroBlock, leftW, p);
     defs.push(h.defs);
     parts2.push(h.svg);
@@ -5251,6 +4825,603 @@ var CARDS = {
   stack: card7,
   socials: card6
 };
+
+// src/core/types.ts
+var CARD_IDS = ["stats", "languages", "3d", "grid", "repos", "hero", "stack", "socials"];
+
+// src/action/config.ts
+var ACTION_INPUT_DEFAULTS = {
+  username: "",
+  token: "",
+  cards: "stats,3d,languages,repos",
+  theme: "aurora",
+  modes: "dark,light",
+  animate: "true",
+  history: "full",
+  hide_languages: "",
+  exclude_repos: "",
+  include_private: "true",
+  repos: "",
+  config: "",
+  output_dir: "profilescape",
+  publish: "branch",
+  branch: "profilescape-output",
+  commit_message: "chore: update profilescape cards",
+  readme: "",
+  github_token: ""
+};
+var INPUT_NAMES = Object.keys(ACTION_INPUT_DEFAULTS);
+var DEFAULT_CARDS = ["stats", "3d", "languages", "repos"];
+var ConfigError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "ConfigError";
+  }
+};
+var CARD_ALIASES = {
+  landscape: "3d",
+  "3d-graph": "3d",
+  contributions: "3d",
+  stat: "stats",
+  overview: "stats",
+  language: "languages",
+  langs: "languages",
+  "top-languages": "languages",
+  repo: "repos",
+  repositories: "repos",
+  projects: "repos",
+  banner: "hero",
+  header: "hero",
+  tech: "stack",
+  "tech-stack": "stack",
+  techstack: "stack",
+  social: "socials",
+  badges: "socials",
+  "contribution-grid": "grid",
+  heatmap: "grid",
+  snake: "grid"
+};
+var CONFIG_KEYS = [
+  "$schema",
+  "theme",
+  "colors",
+  "darkColors",
+  "lightColors",
+  "cards",
+  "modes",
+  "animate",
+  "history",
+  "hideLanguages",
+  "excludeRepos",
+  "includePrivate",
+  "repos",
+  "options"
+];
+var LOGIN_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
+var HEX_RE = /^#?(?:[0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+function splitList(value) {
+  return value.split(/[,\n]/).map((s) => s.trim()).filter(Boolean);
+}
+function editDistance(a, b) {
+  const d = Array.from({ length: a.length + 1 }, (_, i) => Array.from({ length: b.length + 1 }, (_2, j) => i === 0 ? j : j === 0 ? i : 0));
+  const at = (i, j) => d[i][j];
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      let v = Math.min(at(i - 1, j) + 1, at(i, j - 1) + 1, at(i - 1, j - 1) + cost);
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) v = Math.min(v, at(i - 2, j - 2) + 1);
+      d[i][j] = v;
+    }
+  }
+  return at(a.length, b.length);
+}
+function suggest(input, candidates) {
+  const needle = input.toLowerCase();
+  let best;
+  for (const c of candidates) {
+    const d = editDistance(needle, c.toLowerCase());
+    if (d <= Math.max(1, Math.floor(c.length / 3)) && (!best || d < best.d)) best = { c, d };
+  }
+  return best?.c;
+}
+var hint = (input, candidates) => {
+  const s = suggest(input, candidates);
+  return s ? ` (did you mean "${s}"?)` : "";
+};
+function parseBool(value, field) {
+  if (typeof value === "boolean") return value;
+  const v = String(value).trim().toLowerCase();
+  if (["true", "yes", "y", "on", "1"].includes(v)) return true;
+  if (["false", "no", "n", "off", "0"].includes(v)) return false;
+  throw new ConfigError(`${field} must be true or false, got "${String(value)}".`);
+}
+function toList(value, field) {
+  if (Array.isArray(value)) {
+    return value.flatMap((v) => {
+      if (typeof v !== "string" && typeof v !== "number") throw new ConfigError(`${field} must be a list of strings.`);
+      return String(v).split(/[\r\n]+/).map((s) => s.trim());
+    }).filter(Boolean);
+  }
+  if (typeof value === "string") return splitList(value);
+  throw new ConfigError(`${field} must be a list (array or comma-separated string).`);
+}
+var isObject = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+var camel = (key) => key.replace(/[-_]+([a-z0-9])/gi, (_, c) => c.toUpperCase());
+function stripJsonc(text) {
+  let out2 = "";
+  let inString = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      out2 += ch;
+      if (ch === "\\") out2 += text[++i] ?? "";
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      out2 += ch;
+    } else if (ch === "/" && text[i + 1] === "/") {
+      while (i < text.length && text[i] !== "\n" && text[i] !== "\r") {
+        out2 += " ";
+        i++;
+      }
+      i--;
+    } else if (ch === "/" && text[i + 1] === "*") {
+      const end = text.indexOf("*/", i + 2);
+      const stop = end === -1 ? text.length : end + 2;
+      for (; i < stop; i++) out2 += text[i] === "\n" || text[i] === "\r" ? text[i] : " ";
+      i--;
+    } else {
+      out2 += ch;
+    }
+  }
+  let result = "";
+  inString = false;
+  for (let i = 0; i < out2.length; i++) {
+    const ch = out2[i];
+    if (inString) {
+      result += ch;
+      if (ch === "\\") result += out2[++i] ?? "";
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    if (ch === ",") {
+      let j = i + 1;
+      while (j < out2.length && /\s/.test(out2[j])) j++;
+      if (out2[j] === "}" || out2[j] === "]") {
+        result += " ";
+        continue;
+      }
+    }
+    result += ch;
+  }
+  return result;
+}
+function findJsonError(text) {
+  let i = 0;
+  function fail(reason) {
+    throw { pos: i, reason };
+  }
+  function ws() {
+    while (i < text.length && /\s/.test(text[i])) i++;
+  }
+  function str() {
+    i++;
+    while (i < text.length) {
+      const c = text[i];
+      if (c === '"') {
+        i++;
+        return;
+      }
+      if (c === "\\") i += 2;
+      else if (c < " ") fail("Line breaks are not allowed inside strings");
+      else i++;
+    }
+    fail("Unterminated string");
+  }
+  function value() {
+    ws();
+    const ch = text[i];
+    if (ch === void 0) fail("Unexpected end of JSON (is a closing bracket missing?)");
+    if (ch === "{") {
+      i++;
+      ws();
+      if (text[i] === "}") {
+        i++;
+        return;
+      }
+      for (; ; ) {
+        ws();
+        if (text[i] !== '"') fail("Expected a property name in double quotes");
+        str();
+        ws();
+        if (text[i] !== ":") fail('Expected ":" after the property name');
+        i++;
+        value();
+        const end = i;
+        ws();
+        if (text[i] === ",") i++;
+        else if (text[i] === "}") {
+          i++;
+          return;
+        } else {
+          i = end;
+          fail('Expected "," or "}" after this value (is a comma missing?)');
+        }
+      }
+    }
+    if (ch === "[") {
+      i++;
+      ws();
+      if (text[i] === "]") {
+        i++;
+        return;
+      }
+      for (; ; ) {
+        value();
+        const end = i;
+        ws();
+        if (text[i] === ",") i++;
+        else if (text[i] === "]") {
+          i++;
+          return;
+        } else {
+          i = end;
+          fail('Expected "," or "]" after this list item (is a comma missing?)');
+        }
+      }
+    }
+    if (ch === '"') return str();
+    const num = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/.exec(text.slice(i));
+    if (num) {
+      i += num[0].length;
+      return;
+    }
+    for (const lit of ["true", "false", "null"]) {
+      if (text.startsWith(lit, i)) {
+        i += lit.length;
+        return;
+      }
+    }
+    if (ch === "'") fail("Strings must use double quotes");
+    if (/[A-Za-z_]/.test(ch)) fail('Unexpected text; strings must be in double quotes, e.g. "stats"');
+    fail(`Unexpected character ${JSON.stringify(ch)}`);
+  }
+  try {
+    value();
+    ws();
+    if (i < text.length) fail("Unexpected content after the end of the JSON object");
+    return null;
+  } catch (e) {
+    if (typeof e === "object" && e !== null && "pos" in e) return e;
+    throw e;
+  }
+}
+function parseConfigJson(text, source = "config") {
+  const original = text.replace(/^\uFEFF/, "");
+  const clean2 = stripJsonc(original);
+  if (!clean2.trim()) return {};
+  try {
+    return JSON.parse(clean2);
+  } catch (err2) {
+    const fault = findJsonError(clean2);
+    if (!fault) throw new ConfigError(`Invalid JSON in ${source}: ${err2.message}`);
+    const before = clean2.slice(0, fault.pos);
+    const line = before.split("\n").length;
+    const col = fault.pos - before.lastIndexOf("\n");
+    const srcLine = (original.split("\n")[line - 1] ?? "").replace(/\r$/, "").replace(/\t/g, " ");
+    const gutter = String(line);
+    const frame = `
+  ${gutter} | ${srcLine.slice(0, 120)}
+  ${" ".repeat(gutter.length)} | ${" ".repeat(Math.max(0, Math.min(col - 1, 120)))}^`;
+    throw new ConfigError(`Invalid JSON in ${source} at line ${line}, column ${col}: ${fault.reason}${frame}`);
+  }
+}
+function normalizeCards(list, field) {
+  const valid2 = CARD_IDS;
+  const out2 = [];
+  const unknown = [];
+  for (const raw of list) {
+    const key = raw.trim().toLowerCase();
+    if (key === "all") {
+      for (const id2 of CARD_IDS) if (!out2.includes(id2)) out2.push(id2);
+      continue;
+    }
+    const id = valid2.includes(key) ? key : CARD_ALIASES[key];
+    if (!id) unknown.push(raw);
+    else if (!out2.includes(id)) out2.push(id);
+  }
+  if (unknown.length) {
+    const details = unknown.map((u) => `"${u}"${hint(u, valid2)}`).join(", ");
+    throw new ConfigError(`Unknown card${unknown.length > 1 ? "s" : ""} in ${field}: ${details}. Valid cards: ${CARD_IDS.join(", ")} (or "all").`);
+  }
+  if (!out2.length) throw new ConfigError(`${field} must list at least one card. Valid cards: ${CARD_IDS.join(", ")}.`);
+  return out2;
+}
+function normalizeModes(list, field) {
+  const out2 = [];
+  for (const raw of list) {
+    const key = raw.trim().toLowerCase();
+    const modes = key === "dark" || key === "light" ? [key] : key === "both" || key === "auto" ? ["dark", "light"] : void 0;
+    if (!modes) throw new ConfigError(`Unknown mode "${raw}" in ${field}. Use "dark", "light" or "dark,light".`);
+    for (const m of modes) if (!out2.includes(m)) out2.push(m);
+  }
+  if (!out2.length) throw new ConfigError(`${field} must contain "dark", "light" or both.`);
+  return out2;
+}
+function normalizeHistory(value, field) {
+  const v = value.trim().toLowerCase();
+  if (v === "full" || v === "all") return "full";
+  if (v === "year" || v === "1y") return "year";
+  throw new ConfigError(`${field} must be "full" or "year", got "${value}".`);
+}
+function normalizeTheme(value, field, warnings) {
+  const id = value.trim().toLowerCase();
+  const ids = themeIds();
+  if (ids.includes(id)) return id;
+  warnings.push(`Unknown theme "${value}" in ${field}${hint(id, ids)}; using "${DEFAULT_THEME}". Available themes: ${ids.join(", ")}.`);
+  return DEFAULT_THEME;
+}
+function paletteKeys() {
+  const base = getTheme(DEFAULT_THEME).dark;
+  const colors = [];
+  const numbers = [];
+  for (const [k, v] of Object.entries(base)) {
+    if (typeof v === "string") colors.push(k);
+    else if (typeof v === "number") numbers.push(k);
+  }
+  return { colors, numbers, syntax: Object.keys(base.syntax) };
+}
+function normalizeColor(value, field) {
+  if (typeof value !== "string" || !HEX_RE.test(value.trim())) {
+    throw new ConfigError(`${field} must be a hex colour like "#8B7CFF", got ${JSON.stringify(value)}.`);
+  }
+  const v = value.trim();
+  return v.startsWith("#") ? v : `#${v}`;
+}
+function normalizePalette(value, field, warnings) {
+  if (value === void 0 || value === null) return {};
+  if (!isObject(value)) throw new ConfigError(`${field} must be an object of colours, e.g. { "accentA": "#FF7A59" }.`);
+  const keys = paletteKeys();
+  const all = [...keys.colors, ...keys.numbers, "syntax"];
+  const out2 = {};
+  for (const [k, v] of Object.entries(value)) {
+    if (keys.colors.includes(k)) out2[k] = normalizeColor(v, `${field}.${k}`);
+    else if (keys.numbers.includes(k)) {
+      const num = typeof v === "number" ? v : typeof v === "string" ? Number(v) : Number.NaN;
+      if (!Number.isFinite(num) || num < 0 || num > 1) throw new ConfigError(`${field}.${k} must be a number between 0 and 1.`);
+      out2[k] = num;
+    } else if (k === "syntax") {
+      if (!isObject(v)) throw new ConfigError(`${field}.syntax must be an object of colours.`);
+      const syntax = {};
+      for (const [sk, sv] of Object.entries(v)) {
+        if (keys.syntax.includes(sk)) syntax[sk] = normalizeColor(sv, `${field}.syntax.${sk}`);
+        else warnings.push(`Ignoring unknown colour "${field}.syntax.${sk}"${hint(sk, keys.syntax)}.`);
+      }
+      out2.syntax = syntax;
+    } else {
+      warnings.push(`Ignoring unknown colour "${field}.${k}"${hint(k, all)}. Known colours: ${all.join(", ")}.`);
+    }
+  }
+  return out2;
+}
+var BOOL_WORDS = ["true", "false", "yes", "no", "y", "n", "on", "off", "1", "0"];
+function checkOptionType(doc, value, field, warnings) {
+  if (value === void 0 || value === null) return;
+  const bad = (expected) => warnings.push(`${field} must be ${expected}, got ${JSON.stringify(value)}; the card uses its default.`);
+  if (doc.type === "number") {
+    const num = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : Number.NaN;
+    if (!Number.isFinite(num)) bad("a number");
+  } else if (doc.type === "boolean") {
+    if (typeof value !== "boolean" && !(typeof value === "string" && BOOL_WORDS.includes(value.trim().toLowerCase()))) bad("true or false");
+  } else if (doc.type === "list") {
+    if (!Array.isArray(value) && typeof value !== "string") bad("a list");
+  } else if (doc.type === "object") {
+    if (!isObject(value)) bad("an object");
+  } else if (typeof value !== "string" && typeof value !== "number") {
+    bad("a string");
+  }
+}
+function normalizeCardOptions(id, field, value, warnings) {
+  const docs = CARDS[id]?.options ?? [];
+  const keys = docs.map((d) => d.key);
+  const out2 = {};
+  for (const [rawKey, v] of Object.entries(value)) {
+    const key = camel(rawKey.trim());
+    const doc = docs.find((d) => d.key.toLowerCase() === key.toLowerCase());
+    if (!doc) {
+      warnings.push(`Ignoring unknown option "${field}.${rawKey}"${hint(key, keys)}. Options for ${id}: ${keys.join(", ") || "none"}.`);
+      continue;
+    }
+    checkOptionType(doc, v, `${field}.${doc.key}`, warnings);
+    out2[doc.key] = v;
+  }
+  return out2;
+}
+function normalizeOptions(value, warnings) {
+  if (value === void 0 || value === null) return {};
+  if (!isObject(value)) throw new ConfigError('options must be an object keyed by card id, e.g. { "repos": { "layout": "detail" } }.');
+  const out2 = {};
+  for (const [k, v] of Object.entries(value)) {
+    const key = k.trim().toLowerCase();
+    const id = CARD_IDS.includes(key) ? key : CARD_ALIASES[key];
+    if (!id) {
+      warnings.push(`Ignoring options for unknown card "${k}"${hint(key, CARD_IDS)}. Valid cards: ${CARD_IDS.join(", ")}.`);
+      continue;
+    }
+    if (!isObject(v)) throw new ConfigError(`options.${k} must be an object.`);
+    out2[id] = { ...out2[id] ?? {}, ...normalizeCardOptions(id, `options.${k}`, v, warnings) };
+  }
+  return out2;
+}
+function isValidBranchName(name) {
+  return name.length > 0 && name.length <= 200 && !/[\s~^:?*[\\\x00-\x1f\x7f]/.test(name) && !name.includes("..") && !name.includes("@{") && !name.includes("//") && !name.startsWith("/") && !name.endsWith("/") && !name.startsWith("-") && !name.endsWith(".") && !name.endsWith(".lock") && !name.split("/").some((part) => part.startsWith("."));
+}
+function resolveConfig(inputs, json, opts = {}) {
+  const warnings = [];
+  if (json !== void 0 && json !== null && !isObject(json)) {
+    throw new ConfigError('The config must be a JSON object, e.g. { "theme": "aurora", "cards": ["stats", "3d"] }.');
+  }
+  const file = {};
+  for (const [rawKey, value] of Object.entries(json ?? {})) {
+    const key = rawKey === "$schema" ? rawKey : camel(rawKey);
+    if (CONFIG_KEYS.includes(key)) file[key] = value;
+    else if (key === "username" || key === "user" || key === "login") {
+      warnings.push('"username" in the config JSON is ignored; set the username input (Action) or --user (CLI).');
+    } else warnings.push(`Ignoring unknown config key "${rawKey}"${hint(key, CONFIG_KEYS)}.`);
+  }
+  const explicit = (name) => {
+    const v = (inputs[name] ?? "").trim();
+    if (!v) return void 0;
+    if (opts.ignoreDefaultInputs) {
+      const norm2 = (s) => s.replace(/\s+/g, "").toLowerCase();
+      if (norm2(v) === norm2(opts.inputDefaults?.[name] ?? ACTION_INPUT_DEFAULTS[name])) return void 0;
+    }
+    return v;
+  };
+  const has = (key) => file[key] !== void 0 && file[key] !== null;
+  const sources = {};
+  const overridden = [];
+  function pick(key, input, fromInput, fromConfig, fallback) {
+    const v = explicit(input);
+    if (v !== void 0) {
+      sources[key] = "input";
+      if (has(key)) overridden.push(key);
+      return fromInput(v, opts.inputLabel ? opts.inputLabel(input) : `the ${input} input`);
+    }
+    if (has(key)) {
+      sources[key] = "config";
+      return fromConfig(file[key], `config.${key}`);
+    }
+    sources[key] = "default";
+    return fallback;
+  }
+  const cards = pick(
+    "cards",
+    "cards",
+    (v, f) => normalizeCards(splitList(v.replace(/\s+/g, ",")), f),
+    (v, f) => normalizeCards(toList(v, f), f),
+    [...DEFAULT_CARDS]
+  );
+  const theme = pick(
+    "theme",
+    "theme",
+    (v, f) => normalizeTheme(v, f, warnings),
+    (v, f) => {
+      if (typeof v !== "string") throw new ConfigError(`${f} must be a string (a theme id).`);
+      return normalizeTheme(v, f, warnings);
+    },
+    DEFAULT_THEME
+  );
+  const modes = pick(
+    "modes",
+    "modes",
+    (v, f) => normalizeModes(splitList(v.replace(/\s+/g, ",")), f),
+    (v, f) => normalizeModes(toList(v, f), f),
+    ["dark", "light"]
+  );
+  const animate = pick("animate", "animate", parseBool, parseBool, true);
+  const history = pick(
+    "history",
+    "history",
+    normalizeHistory,
+    (v, f) => normalizeHistory(String(v), f),
+    "full"
+  );
+  const hideLanguages = pick("hideLanguages", "hide_languages", (v) => splitList(v), toList, []);
+  const excludeRepos = pick("excludeRepos", "exclude_repos", (v) => splitList(v), toList, []);
+  const includePrivate = pick("includePrivate", "include_private", parseBool, parseBool, true);
+  const repos = pick("repos", "repos", (v) => splitList(v), toList, []);
+  for (const r of repos) {
+    if (!/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$|^[A-Za-z0-9._-]+$/.test(r)) {
+      throw new ConfigError(`Invalid repository "${r}" in repos. Use "name" (your own repo) or "owner/name".`);
+    }
+  }
+  const colors = normalizePalette(file.colors, "colors", warnings);
+  const darkColors = normalizePalette(file.darkColors, "darkColors", warnings);
+  const lightColors = normalizePalette(file.lightColors, "lightColors", warnings);
+  const options = normalizeOptions(file.options, warnings);
+  for (const id of Object.keys(options)) {
+    if (!cards.includes(id)) warnings.push(`options.${id} is set but the "${id}" card is not enabled (cards: ${cards.join(", ")}).`);
+  }
+  const username = ((inputs.username ?? "").trim() || (opts.defaultUsername ?? "").trim()).replace(/^@/, "");
+  if (username && !LOGIN_RE.test(username)) {
+    throw new ConfigError(`"${username}" is not a valid GitHub username.`);
+  }
+  if (!username && (opts.requireUsername ?? true)) {
+    throw new ConfigError("No username: set the username input (it defaults to the repository owner when running in GitHub Actions).");
+  }
+  const token = (inputs.token ?? "").trim();
+  const publishRaw = (inputs.publish ?? "").trim().toLowerCase() || "branch";
+  const publish = ["branch", "true", "yes", "on"].includes(publishRaw) ? "branch" : ["none", "false", "no", "off"].includes(publishRaw) ? "none" : void 0;
+  if (!publish) throw new ConfigError(`publish must be "branch" or "none", got "${inputs.publish}".`);
+  const branch = (inputs.branch ?? "").trim() || ACTION_INPUT_DEFAULTS.branch;
+  if (!isValidBranchName(branch)) throw new ConfigError(`"${branch}" is not a valid branch name.`);
+  const outputDir = (inputs.output_dir ?? "").trim() || ACTION_INPUT_DEFAULTS.output_dir;
+  return {
+    config: { username, cards, theme, colors, darkColors, lightColors, modes, animate, hideLanguages, excludeRepos, includePrivate, repos, options },
+    settings: {
+      token,
+      githubToken: (inputs.github_token ?? "").trim(),
+      history,
+      outputDir,
+      publish,
+      branch,
+      commitMessage: (inputs.commit_message ?? "").trim() || ACTION_INPUT_DEFAULTS.commit_message,
+      readme: (inputs.readme ?? "").trim()
+    },
+    warnings,
+    sources,
+    overridden
+  };
+}
+
+// src/action/io.ts
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+function loadConfigText(value, workspace, where = "action") {
+  const v = value.trim();
+  if (!v) return null;
+  if (v.startsWith("{")) return { text: v, source: where === "cli" ? "--config" : "config input" };
+  const path = isAbsolute(v) ? v : resolve(workspace, v);
+  if (!existsSync(path)) {
+    throw new ConfigError(
+      where === "cli" ? `Config file "${v}" was not found (looked in ${path}). Paths are relative to the current directory; you can also pass the JSON inline.` : `Config file "${v}" was not found (looked in ${path}). Paths are relative to the repository root; make sure the workflow runs actions/checkout before Profilescape, or pass the JSON inline.`
+    );
+  }
+  return { text: readFileSync(path, "utf8"), source: v };
+}
+function formatBytes(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
+}
+function writeFiles(outDir, files) {
+  const root = resolve(outDir);
+  mkdirSync(root, { recursive: true });
+  const written = [];
+  for (const f of files) {
+    const target = resolve(join(root, f.path));
+    if (target !== root && !target.startsWith(root.endsWith(sep) ? root : root + sep)) {
+      throw new Error(`Refusing to write "${f.path}" outside ${root}.`);
+    }
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, f.content, "utf8");
+    written.push(target);
+  }
+  return written;
+}
+
+// src/action/readme.ts
+var START_MARKER = "<!-- profilescape:start -->";
+var END_MARKER = "<!-- profilescape:end -->";
+function wrapWithMarkers(markup, eol = "\n") {
+  const body = markup.replace(/\r\n?/g, "\n").trim();
+  const lines = body ? [START_MARKER, "", body, "", END_MARKER] : [START_MARKER, END_MARKER];
+  return lines.join("\n").split("\n").join(eol);
+}
 
 // src/core/fixtures.ts
 var DEMO_NOW = /* @__PURE__ */ new Date("2026-10-05T12:00:00Z");
@@ -5391,8 +5562,7 @@ function demoCalendar(now, since) {
 function demoProfile(now = DEMO_NOW) {
   const createdAt = "2021-03-14T10:00:00Z";
   const calendar = demoCalendar(now, createdAt.slice(0, 10));
-  const lastYear = calendar.slice(-365);
-  const contributions = lastYear.reduce((s, d) => s + d.count, 0);
+  const contributions = totalOf(lastYear(calendar, now));
   const totalBytes = /* @__PURE__ */ new Map();
   for (const r of DEMO_REPOS) {
     for (const l of r.languages) {
@@ -5445,24 +5615,30 @@ function demoProfile(now = DEMO_NOW) {
 // src/core/github.ts
 var GitHubError = class extends Error {
   status;
-  constructor(message, status) {
+  /** GraphQL error type (e.g. RESOURCE_LIMITS_EXCEEDED) or a local code (TIMEOUT, NETWORK, ORGANIZATION). */
+  type;
+  constructor(message, status, type) {
     super(message);
     this.name = "GitHubError";
     this.status = status;
+    this.type = type;
   }
 };
-var REPO_FIELDS = `
-fragment Repo on Repository {
-  name nameWithOwner owner { login } description url homepageUrl
+var LISTING_FIELDS = `
+fragment RepoListing on Repository {
+  id name nameWithOwner owner { login } description url homepageUrl
   stargazerCount forkCount isArchived isFork isPrivate isTemplate pushedAt createdAt
+  primaryLanguage { name color }
+  repositoryTopics(first: 8) { nodes { topic { name } } }
+  languages(first: 10, orderBy: { field: SIZE, direction: DESC }) { edges { size node { name color } } }
+}`;
+var DETAIL_FIELDS = `
+fragment RepoDetail on Repository {
   watchers { totalCount }
   issues(states: OPEN) { totalCount }
   pullRequests(states: OPEN) { totalCount }
   licenseInfo { spdxId }
-  primaryLanguage { name color }
-  repositoryTopics(first: 8) { nodes { topic { name } } }
   latestRelease { tagName publishedAt }
-  languages(first: 10, orderBy: { field: SIZE, direction: DESC }) { edges { size node { name color } } }
 }`;
 var PROFILE_Q = `
 query($login: String!) {
@@ -5470,12 +5646,22 @@ query($login: String!) {
     login name bio location company websiteUrl twitterUsername avatarUrl createdAt
     followers { totalCount }
     following { totalCount }
-    pinnedItems(first: 6, types: REPOSITORY) { nodes { ... on Repository { ...Repo } } }
+    publicRepos: repositories(privacy: PUBLIC, ownerAffiliations: OWNER, isFork: false) { totalCount }
+    pinnedItems(first: 6, types: REPOSITORY) { nodes { ... on Repository { ...RepoListing } } }
     contributionsCollection {
+      contributionYears
       totalCommitContributions totalPullRequestContributions totalIssueContributions
       totalPullRequestReviewContributions totalRepositoryContributions restrictedContributionsCount
       contributionCalendar { totalContributions }
-      commitContributionsByRepository(maxRepositories: 100) {
+    }
+  }
+}
+${LISTING_FIELDS}`;
+var COMMITS_Q = `
+query($login: String!, $max: Int!) {
+  user(login: $login) {
+    contributionsCollection {
+      commitContributionsByRepository(maxRepositories: $max) {
         contributions { totalCount }
         repository {
           nameWithOwner isPrivate isFork
@@ -5484,20 +5670,33 @@ query($login: String!) {
       }
     }
   }
-}
-${REPO_FIELDS}`;
+}`;
 var REPOS_Q = `
+query($login: String!, $cursor: String, $first: Int!) {
+  user(login: $login) {
+    repositories(first: $first, after: $cursor, ownerAffiliations: OWNER, isFork: false,
+                 orderBy: { field: STARGAZERS, direction: DESC }) {
+      pageInfo { hasNextPage endCursor }
+      nodes { ...RepoListing }
+    }
+  }
+}
+${LISTING_FIELDS}`;
+var STARS_Q = `
 query($login: String!, $cursor: String) {
   user(login: $login) {
     repositories(first: 100, after: $cursor, ownerAffiliations: OWNER, isFork: false,
                  orderBy: { field: STARGAZERS, direction: DESC }) {
-      totalCount
       pageInfo { hasNextPage endCursor }
-      nodes { ...Repo }
+      nodes { nameWithOwner stargazerCount isPrivate }
     }
   }
+}`;
+var DETAILS_Q = `
+query($ids: [ID!]!) {
+  nodes(ids: $ids) { ... on Repository { id ...RepoDetail } }
 }
-${REPO_FIELDS}`;
+${DETAIL_FIELDS}`;
 var CALENDAR_Q = `
 query($login: String!, $from: DateTime!, $to: DateTime!) {
   user(login: $login) {
@@ -5508,35 +5707,68 @@ query($login: String!, $from: DateTime!, $to: DateTime!) {
 }`;
 var REPO_Q = `
 query($owner: String!, $name: String!) {
-  repository(owner: $owner, name: $name) { ...Repo }
+  repository(owner: $owner, name: $name) { ...RepoListing ...RepoDetail }
 }
-${REPO_FIELDS}`;
-var sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-async function graphql(o, query, variables) {
+${LISTING_FIELDS}
+${DETAIL_FIELDS}`;
+var OWNER_Q = `
+query($login: String!) {
+  repositoryOwner(login: $login) { __typename }
+}`;
+var DETAIL_CANDIDATES = 12;
+var MAX_TOTAL_REPO_PAGES = 50;
+var CALENDAR_CONCURRENCY = 4;
+var DAY_MS = 864e5;
+var sleep = (ms) => ms > 0 ? new Promise((r) => setTimeout(r, ms)) : Promise.resolve();
+function summarizeErrors(errors) {
+  const counts = /* @__PURE__ */ new Map();
+  for (const e of errors) counts.set(e.message, (counts.get(e.message) ?? 0) + 1);
+  const parts2 = [...counts].map(([m, n2]) => n2 > 1 ? `${m} (x${n2})` : m);
+  return parts2.length > 3 ? `${parts2.slice(0, 3).join("; ")}; and ${parts2.length - 3} more` : parts2.join("; ");
+}
+function networkError(err2, timeoutMs, endpoint) {
+  const e = err2;
+  if (e?.name === "TimeoutError" || e?.name === "AbortError") {
+    return new GitHubError(`GitHub API did not respond within ${Math.round(timeoutMs / 1e3)}s.`, void 0, "TIMEOUT");
+  }
+  let host = endpoint;
+  try {
+    host = new URL(endpoint).host;
+  } catch {
+  }
+  const detail = e?.cause?.code ?? e?.cause?.message ?? e?.message ?? String(err2);
+  return new GitHubError(`Could not reach the GitHub API at ${host} (${detail}). Check the network connection and try again.`, void 0, "NETWORK");
+}
+async function graphql(o, query, variables, opts = {}) {
   const doFetch = o.fetchImpl ?? fetch;
+  const endpoint = o.apiUrl ?? "https://api.github.com/graphql";
+  const timeoutMs = o.timeoutMs ?? 3e4;
+  const baseDelay = o.retryDelayMs ?? 800;
   let lastError;
   for (let attempt = 0; attempt < 3; attempt++) {
-    if (attempt) await sleep(800 * 2 ** attempt);
+    if (attempt) await sleep(baseDelay * 2 ** attempt);
     let res;
+    let text;
     try {
-      res = await doFetch(o.apiUrl ?? "https://api.github.com/graphql", {
+      res = await doFetch(endpoint, {
         method: "POST",
         headers: {
           Authorization: `bearer ${o.token}`,
           "Content-Type": "application/json",
           "User-Agent": "profilescape"
         },
-        body: JSON.stringify({ query, variables })
+        body: JSON.stringify({ query, variables }),
+        signal: AbortSignal.timeout(timeoutMs)
       });
+      text = await res.text();
     } catch (err2) {
-      lastError = err2;
+      lastError = networkError(err2, timeoutMs, endpoint);
       continue;
     }
     if (res.status >= 500) {
       lastError = new GitHubError(`GitHub API responded ${res.status}`, res.status);
       continue;
     }
-    const text = await res.text();
     if (res.status === 401) throw new GitHubError("GitHub rejected the token (401). Check that the token is valid and not expired.", 401);
     if (res.status === 403 || res.status === 429) {
       throw new GitHubError(`GitHub API rate limit or permission error (${res.status}): ${text.slice(0, 200)}`, res.status);
@@ -5550,21 +5782,38 @@ async function graphql(o, query, variables) {
       continue;
     }
     if (body.errors?.length) {
-      const msg = body.errors.map((e) => e.message).join("; ");
-      if (body.errors.some((e) => e.type === "NOT_FOUND")) throw new GitHubError(`Not found: ${msg}`, 404);
-      if (/something went wrong|timeout/i.test(msg) && attempt < 2) {
-        lastError = new GitHubError(msg);
+      const msg = summarizeErrors(body.errors);
+      const types = new Set(body.errors.map((e) => e.type));
+      if (types.has("RATE_LIMITED")) throw new GitHubError(`GitHub API rate limit exceeded: ${msg}`, 429, "RATE_LIMITED");
+      if (types.has("RESOURCE_LIMITS_EXCEEDED")) throw new GitHubError(`GitHub GraphQL error: ${msg}`, void 0, "RESOURCE_LIMITS_EXCEEDED");
+      if (/something went wrong|timeout/i.test(msg)) {
+        lastError = new GitHubError(`GitHub GraphQL error: ${msg}`);
         continue;
       }
-      throw new GitHubError(`GitHub GraphQL error: ${msg}`);
+      if (opts.allowPartial && body.data) {
+        o.log?.(`GitHub left out some data: ${msg}`);
+        return body.data;
+      }
+      if (types.has("NOT_FOUND")) throw new GitHubError(`Not found: ${msg}`, 404, "NOT_FOUND");
+      throw new GitHubError(`GitHub GraphQL error: ${msg}`, void 0, [...types][0]);
     }
     if (!body.data) throw new GitHubError("GitHub API returned no data");
     return body.data;
   }
   throw lastError instanceof Error ? lastError : new GitHubError(String(lastError));
 }
+var isResourceLimit = (err2) => err2 instanceof GitHubError && err2.type === "RESOURCE_LIMITS_EXCEEDED";
 var FALLBACK_COLOR = "#8B949E";
 var langs = (l) => (l?.edges ?? []).map((e) => ({ name: e.node.name, color: e.node.color ?? FALLBACK_COLOR, value: e.size }));
+function detailOf(r, createdAt) {
+  return {
+    watchers: r.watchers?.totalCount ?? 0,
+    openIssues: r.issues?.totalCount ?? 0,
+    openPullRequests: r.pullRequests?.totalCount ?? 0,
+    license: r.licenseInfo?.spdxId && r.licenseInfo.spdxId !== "NOASSERTION" ? r.licenseInfo.spdxId : null,
+    latestRelease: r.latestRelease ? { tag: r.latestRelease.tagName, publishedAt: r.latestRelease.publishedAt ?? createdAt } : null
+  };
+}
 function toRepo(r) {
   return {
     owner: r.owner.login,
@@ -5575,14 +5824,10 @@ function toRepo(r) {
     homepageUrl: r.homepageUrl || null,
     stars: r.stargazerCount,
     forks: r.forkCount,
-    watchers: r.watchers.totalCount,
-    openIssues: r.issues.totalCount,
-    openPullRequests: r.pullRequests.totalCount,
+    ...detailOf(r, r.createdAt),
     primaryLanguage: r.primaryLanguage ? { name: r.primaryLanguage.name, color: r.primaryLanguage.color ?? FALLBACK_COLOR } : null,
     languages: langs(r.languages),
-    topics: r.repositoryTopics.nodes.map((n2) => n2.topic.name),
-    license: r.licenseInfo?.spdxId && r.licenseInfo.spdxId !== "NOASSERTION" ? r.licenseInfo.spdxId : null,
-    latestRelease: r.latestRelease ? { tag: r.latestRelease.tagName, publishedAt: r.latestRelease.publishedAt ?? r.createdAt } : null,
+    topics: (r.repositoryTopics?.nodes ?? []).map((n2) => n2.topic.name),
     isArchived: r.isArchived,
     isFork: r.isFork,
     isPrivate: r.isPrivate,
@@ -5605,19 +5850,56 @@ function aggregate(entries, hide) {
   }
   return [...out2.values()].sort((a, b) => b.value - a.value);
 }
-async function fetchCalendar(o, createdAt, now) {
-  const days = /* @__PURE__ */ new Map();
-  const yearMs = 365 * 864e5;
-  let start = o.history === "year" ? new Date(now.getTime() - 372 * 864e5) : new Date(createdAt);
-  const earliest = new Date(now.getTime() - 25 * yearMs);
-  if (start < earliest) start = earliest;
+async function mapLimit(items2, limit, fn) {
+  const out2 = new Array(items2.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items2.length) {
+      const i = next++;
+      out2[i] = await fn(items2[i]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items2.length) }, worker));
+  return out2;
+}
+function calendarWindows(history, createdAt, contributionYears, now) {
+  const windows = [];
+  if (history === "year") {
+    let start2 = new Date(now.getTime() - 372 * DAY_MS);
+    while (start2 < now) {
+      const end = new Date(Math.min(start2.getTime() + 365 * DAY_MS, now.getTime()));
+      windows.push({ from: start2, to: end });
+      start2 = end;
+    }
+    return windows;
+  }
+  const created = Date.parse(createdAt);
+  const years = contributionYears.filter((y) => Number.isInteger(y));
+  const firstYearStart = years.length ? Date.UTC(Math.min(...years), 0, 1) : Number.NaN;
+  let startMs = Math.min(...[created, firstYearStart].filter(Number.isFinite));
+  if (!Number.isFinite(startMs)) startMs = now.getTime() - 372 * DAY_MS;
+  startMs = Math.max(startMs, Date.UTC(now.getUTCFullYear() - 25, 0, 1));
+  let start = new Date(startMs);
   while (start < now) {
-    const end = new Date(Math.min(start.getTime() + yearMs, now.getTime()));
-    const data = await graphql(o, CALENDAR_Q, { login: o.login, from: start.toISOString(), to: end.toISOString() });
+    const nextYear = Date.UTC(start.getUTCFullYear() + 1, 0, 1);
+    const end = new Date(Math.min(nextYear - 1e3, now.getTime()));
+    windows.push({ from: start, to: end });
+    start = new Date(nextYear);
+  }
+  return windows;
+}
+async function fetchCalendar(o, createdAt, contributionYears, now) {
+  const windows = calendarWindows(o.history ?? "full", createdAt, contributionYears, now);
+  const results = await mapLimit(
+    windows,
+    CALENDAR_CONCURRENCY,
+    (w) => graphql(o, CALENDAR_Q, { login: o.login, from: w.from.toISOString(), to: w.to.toISOString() })
+  );
+  const days = /* @__PURE__ */ new Map();
+  for (const data of results) {
     for (const w of data.user.contributionsCollection.contributionCalendar.weeks) {
       for (const d of w.contributionDays) days.set(d.date, d.contributionCount);
     }
-    start = end;
   }
   const today = isoDate(now);
   return [...days.entries()].filter(([date]) => date <= today).sort(([a], [b]) => a < b ? -1 : 1).map(([date, count]) => ({ date, count }));
@@ -5635,6 +5917,82 @@ async function fetchRepo(o, spec) {
     throw err2;
   }
 }
+async function fetchCommitRepos(o) {
+  for (let max = 100; ; max = Math.floor(max / 2)) {
+    try {
+      const data = await graphql(
+        o,
+        COMMITS_Q,
+        { login: o.login, max },
+        { allowPartial: true }
+      );
+      const list = data.user?.contributionsCollection?.commitContributionsByRepository ?? [];
+      return list.filter((r) => !!r?.repository);
+    } catch (err2) {
+      if (!isResourceLimit(err2) || max <= 12) throw err2;
+      o.log?.(`Commit statistics were too heavy for one request; retrying with the top ${Math.floor(max / 2)} repositories.`);
+    }
+  }
+}
+async function fetchRepoListing(o) {
+  const detailedLimit = Math.max(1, Math.floor(o.maxRepoPages ?? 5)) * 100;
+  const repos = [];
+  let cursor = null;
+  let size = 100;
+  let pages = 0;
+  let more = true;
+  while (more && repos.length < detailedLimit) {
+    const first = Math.min(size, detailedLimit - repos.length);
+    let data;
+    try {
+      data = await graphql(o, REPOS_Q, { login: o.login, cursor, first });
+    } catch (err2) {
+      if (!isResourceLimit(err2) || size <= 10) throw err2;
+      size = Math.max(10, Math.floor(size / 2));
+      o.log?.(`GitHub found a page of 100 repositories too heavy; retrying with ${size} per page.`);
+      continue;
+    }
+    pages++;
+    repos.push(...data.user.repositories.nodes.filter((n2) => !!n2));
+    more = data.user.repositories.pageInfo.hasNextPage;
+    cursor = data.user.repositories.pageInfo.endCursor;
+  }
+  const tail = [];
+  if (more) {
+    o.log?.(`Read languages and topics of the ${repos.length} most starred repositories; counting stars of the rest.`);
+    while (more && pages < MAX_TOTAL_REPO_PAGES) {
+      const data = await graphql(o, STARS_Q, { login: o.login, cursor });
+      pages++;
+      tail.push(...data.user.repositories.nodes.filter((n2) => !!n2));
+      more = data.user.repositories.pageInfo.hasNextPage;
+      cursor = data.user.repositories.pageInfo.endCursor;
+    }
+    if (more) o.log?.(`Stopped after ${repos.length + tail.length} repositories; stars of the rest are not counted.`);
+  }
+  return { repos, tail };
+}
+async function fetchDetails(o, ids) {
+  const out2 = /* @__PURE__ */ new Map();
+  if (!ids.length) return out2;
+  const data = await graphql(o, DETAILS_Q, { ids }, { allowPartial: true });
+  for (const n2 of data.nodes ?? []) if (n2?.id) out2.set(n2.id, n2);
+  return out2;
+}
+async function explainMissingUser(o, original) {
+  let kind;
+  try {
+    kind = (await graphql(o, OWNER_Q, { login: o.login })).repositoryOwner?.__typename;
+  } catch {
+  }
+  if (kind === "Organization") {
+    throw new GitHubError(
+      `"${o.login}" is an organization. Profilescape renders personal profiles, so set the username to a user account.`,
+      404,
+      "ORGANIZATION"
+    );
+  }
+  throw original;
+}
 async function fetchProfile(o) {
   const now = o.now ?? /* @__PURE__ */ new Date();
   const includePrivate = o.includePrivate ?? true;
@@ -5644,37 +6002,49 @@ async function fetchProfile(o) {
     const lower = nameWithOwner.toLowerCase();
     return exclude.has(lower) || exclude.has(lower.split("/")[1] ?? "");
   };
-  const profile = await graphql(o, PROFILE_Q, { login: o.login });
-  const u = profile.user;
-  if (!u) throw new GitHubError(`GitHub user "${o.login}" not found`, 404);
-  const repos = [];
-  let cursor = null;
-  for (let page = 0; page < (o.maxRepoPages ?? 5); page++) {
-    const data = await graphql(o, REPOS_Q, { login: o.login, cursor });
-    repos.push(...data.user.repositories.nodes.map(toRepo));
-    if (!data.user.repositories.pageInfo.hasNextPage) break;
-    cursor = data.user.repositories.pageInfo.endCursor;
-    if (page === (o.maxRepoPages ?? 5) - 1) o.log?.(`Stopped after ${repos.length} repositories (maxRepoPages).`);
+  let u;
+  try {
+    u = (await graphql(o, PROFILE_Q, { login: o.login })).user;
+  } catch (err2) {
+    if (err2 instanceof GitHubError && err2.status === 404) return explainMissingUser(o, err2);
+    throw err2;
   }
-  const visible = (r) => (includePrivate || !r.isPrivate) && !isExcluded(r.nameWithOwner);
-  const ownRepos = repos.filter(visible);
+  if (!u) return explainMissingUser(o, new GitHubError(`GitHub user "${o.login}" not found`, 404, "NOT_FOUND"));
   const cc = u.contributionsCollection;
+  const [commitRepos, listing] = await Promise.all([fetchCommitRepos(o), fetchRepoListing(o)]);
+  const visible = (r) => (includePrivate || !r.isPrivate) && !isExcluded(r.nameWithOwner);
   const profileRepo = `${u.login}/${u.login}`.toLowerCase();
-  const committed = cc.commitContributionsByRepository.filter(
-    (r) => r.repository.nameWithOwner.toLowerCase() !== profileRepo && !r.repository.isFork && (includePrivate || !r.repository.isPrivate) && !isExcluded(r.repository.nameWithOwner)
-  );
+  const rawPinned = u.pinnedItems.nodes.filter((r) => !!r?.nameWithOwner).filter(visible);
+  const rawOwn = listing.repos.filter(visible);
+  const ranked = rawOwn.filter((r) => !r.isPrivate && !r.isArchived && r.nameWithOwner.toLowerCase() !== profileRepo).sort((a, b) => b.stargazerCount - a.stargazerCount || ((b.pushedAt ?? "") > (a.pushedAt ?? "") ? 1 : (b.pushedAt ?? "") < (a.pushedAt ?? "") ? -1 : 0)).slice(0, DETAIL_CANDIDATES);
+  const ids = [...new Set([...rawPinned, ...ranked].map((r) => r.id).filter((id) => !!id))];
+  const [calendar, extraFetched, details] = await Promise.all([
+    fetchCalendar(o, u.createdAt, cc.contributionYears ?? [], now),
+    Promise.all((o.extraRepos ?? []).map((spec) => fetchRepo(o, spec))),
+    fetchDetails(o, ids)
+  ]);
+  const withDetail = (r) => {
+    const d = r.id ? details.get(r.id) : void 0;
+    return toRepo(d ? { ...r, ...d } : r);
+  };
+  const ownRepos = rawOwn.map(withDetail);
+  const extra = extraFetched.filter((r) => r !== null && (includePrivate || !r.isPrivate));
+  const committed = commitRepos.filter((r) => {
+    const repo2 = r.repository;
+    return !!repo2 && repo2.nameWithOwner.toLowerCase() !== profileRepo && !repo2.isFork && (includePrivate || !repo2.isPrivate) && !isExcluded(repo2.nameWithOwner);
+  });
   const languagesByBytes = aggregate(
     ownRepos.map((r) => ({ weight: r.languages.reduce((s, l) => s + l.value, 0), languages: r.languages })),
     hide
   );
   const byCommits = aggregate(
-    committed.map((r) => ({ weight: r.contributions.totalCount, languages: langs(r.repository.languages) })),
+    committed.map((r) => ({ weight: r.contributions.totalCount, languages: langs(r.repository?.languages) })),
     hide
   );
-  const calendar = await fetchCalendar(o, u.createdAt, now);
-  const extra = (await Promise.all((o.extraRepos ?? []).map((spec) => fetchRepo(o, spec)))).filter(
-    (r) => r !== null && (includePrivate || !r.isPrivate)
-  );
+  const everyRepo = [...listing.repos, ...listing.tail];
+  const publicIncluded = everyRepo.filter((r) => !r.isPrivate && !isExcluded(r.nameWithOwner));
+  const excludedPublic = everyRepo.length - publicIncluded.length - everyRepo.filter((r) => r.isPrivate).length;
+  const publicTotal = typeof u.publicRepos?.totalCount === "number" ? u.publicRepos.totalCount : everyRepo.filter((r) => !r.isPrivate).length;
   return {
     login: u.login,
     name: u.name || null,
@@ -5700,10 +6070,10 @@ async function fetchProfile(o) {
     languages: byCommits.length ? byCommits : languagesByBytes,
     languagesByBytes,
     repos: ownRepos,
-    pinned: u.pinnedItems.nodes.filter(Boolean).map(toRepo).filter(visible),
+    pinned: rawPinned.map(withDetail),
     extraRepos: extra,
-    totalStars: repos.filter((r) => !r.isPrivate).reduce((s, r) => s + r.stars, 0),
-    publicRepoCount: repos.filter((r) => !r.isPrivate).length,
+    totalStars: publicIncluded.reduce((s, r) => s + r.stargazerCount, 0),
+    publicRepoCount: Math.max(0, publicTotal - excludedPublic),
     generatedAt: now.toISOString()
   };
 }
@@ -5922,6 +6292,12 @@ function listThemes() {
   out();
   out(dim('Use --theme <id>, or tweak any colour with "colors", "darkColors" and "lightColors" in a --config file.'));
 }
+var DESCRIPTIVE_DEFAULTS = /* @__PURE__ */ new Set(["hero.name", "hero.role", "hero.status", "hero.statusColor", "hero.codeLanguage", "hero.codeFile"]);
+function formatDefault(card9, o) {
+  if (o.default === void 0) return "";
+  if (typeof o.default === "string" && (o.type !== "string" || DESCRIPTIVE_DEFAULTS.has(`${card9}.${o.key}`))) return ` (default: ${o.default})`;
+  return ` = ${JSON.stringify(o.default)}`;
+}
 function listCards() {
   out(bold("Cards"));
   const width = Math.max(...CARD_IDS.map((id) => id.length));
@@ -5931,8 +6307,7 @@ function listCards() {
     out(`  ${cyan(id.padEnd(width))}  ${bold(card9.title)}`);
     if (card9.description && card9.description !== "TODO") out(`${" ".repeat(pad)}${dim(wrapText(card9.description, pad))}`);
     for (const o of card9.options) {
-      const def = o.default === void 0 ? "" : ` = ${JSON.stringify(o.default)}`;
-      out(`${" ".repeat(pad)}${o.key} ${dim(`<${o.type}>${def}`)}`);
+      out(`${" ".repeat(pad)}${o.key} ${dim(`<${o.type}>${formatDefault(id, o)}`)}`);
       out(`${" ".repeat(pad + 2)}${dim(wrapText(o.description, pad + 2))}`);
     }
     out();
@@ -5943,8 +6318,11 @@ function friendly(e) {
   if (e instanceof GitHubError) {
     if (e.status === 401) return `${e.message}
 Tip: GH_TOKEN=$(gh auth token) profilescape --user <login>`;
+    if (e.type === "ORGANIZATION") return e.message;
     if (e.status === 404) return `${e.message}
 Check the --user value.`;
+    if (e.status === 403 || e.status === 429) return `${e.message}
+If this is a rate limit, wait a few minutes and try again.`;
     return e.message;
   }
   if (e instanceof ConfigError || e instanceof UsageError) return e.message;
@@ -5988,7 +6366,7 @@ async function main(argv) {
     output_dir: v.out,
     publish: "none"
   };
-  const loaded = v.config ? loadConfigText(v.config, process.cwd()) : null;
+  const loaded = v.config ? loadConfigText(v.config, process.cwd(), "cli") : null;
   const json = loaded ? parseConfigJson(loaded.text, loaded.source) : void 0;
   const { config, settings, warnings } = resolveConfig(inputs, json, {
     requireUsername: !demo,
@@ -6011,6 +6389,11 @@ Or try ${cyan("profilescape --demo")}.`
       );
     }
     now = /* @__PURE__ */ new Date();
+    if (!config.includePrivate) {
+      err(
+        `${yellow("warning")} Private repositories are left out of repository and language statistics, but contribution counts (calendar, totals and streaks) still include the private contributions your token can see.`
+      );
+    }
     out(dim(`Fetching @${config.username} from GitHub${settings.history === "full" ? " (full history)" : ""}...`));
     data = await fetchProfile({
       token,

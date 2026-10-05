@@ -1,4 +1,4 @@
-import { mix, shade } from './svg.ts';
+import { contrast, deltaE, lightness, mix, shade } from './svg.ts';
 import { PRESETS } from './theme-presets.ts';
 import type { Mode, Palette, PaletteOverrides, Theme } from './types.ts';
 
@@ -13,7 +13,7 @@ const aurora: Theme = {
     border: '#232838',
     text: '#E6E8F0',
     muted: '#8B93A7',
-    faint: '#5A6178',
+    faint: '#5C637A',
     accentA: '#8B7CFF',
     accentB: '#3EC6E0',
     success: '#3FB950',
@@ -87,8 +87,59 @@ export function applyOverrides(base: Palette, ...overrides: (PaletteOverrides | 
   return out;
 }
 
-/** Five contribution levels (none → busiest). Shared by every contribution visual so colour always means "how much". */
+/** Minimum perceived-lightness step (CIELAB L*) between neighbouring contribution levels. */
+export const RAMP_STEP = 7;
+
+/**
+ * Five contribution levels (none → busiest). Shared by every contribution
+ * visual so colour always means "how much". The hues run empty → accentA →
+ * accentB, and lightness always moves one way: each level is at least
+ * RAMP_STEP lighter than the one before on a dark panel, or darker on a light
+ * one, and visibly different (CIE76 ΔE of 10 or more). A level that falls
+ * short is pushed toward white (dark) or black (light) until it does, so a
+ * light accentB never makes the busiest days look quieter than the middle ones.
+ */
 export function contribRamp(p: Palette, mode: Mode): [string, string, string, string, string] {
-  const peak = mode === 'dark' ? mix(p.accentB, '#FFFFFF', 0.35) : shade(p.accentB, 0.15);
-  return [p.empty, mix(p.empty, p.accentA, 0.45), p.accentA, mix(p.accentA, p.accentB, 0.6), peak];
+  const dark = mode === 'dark';
+  const peak = dark ? mix(p.accentB, '#FFFFFF', 0.35) : shade(p.accentB, 0.15);
+  const ramp: [string, string, string, string, string] = [
+    p.empty,
+    mix(p.empty, p.accentA, 0.45),
+    p.accentA,
+    mix(p.accentA, p.accentB, 0.6),
+    peak,
+  ];
+  const toward = dark ? '#FFFFFF' : '#000000';
+  const rise = (a: string, b: string) => (dark ? lightness(b) - lightness(a) : lightness(a) - lightness(b));
+  for (let i = 1; i < ramp.length; i++) {
+    const prev = ramp[i - 1] as string;
+    const base = ramp[i] as string;
+    let c = base;
+    const distinct = (x: string) => rise(prev, x) >= RAMP_STEP && deltaE(prev, x) >= 10;
+    for (let s = 1; s <= 40 && !distinct(c); s++) c = mix(base, toward, s / 40);
+    ramp[i] = c;
+  }
+  return ramp;
+}
+
+/**
+ * Colour for an "Other" slice (several languages folded together): the first
+ * neutral from the palette that stays visibly different (CIE76 ΔE of 12 or
+ * more) from every named slice, so a language without a GitHub colour, which
+ * arrives grey, never looks like "Other". Falls back to the most distinct one.
+ */
+export function otherColor(p: Palette, used: readonly string[]): string {
+  const candidates = [p.faint, mix(p.faint, p.text, 0.45), mix(p.faint, p.panel, 0.45), p.muted];
+  let best = p.faint;
+  let bestScore = -1;
+  for (const c of candidates) {
+    if (contrast(c, p.panel) < 1.3) continue;
+    const score = Math.min(Number.POSITIVE_INFINITY, ...used.map((u) => deltaE(c, u)));
+    if (score >= 12) return c;
+    if (score > bestScore) {
+      best = c;
+      bestScore = score;
+    }
+  }
+  return best;
 }

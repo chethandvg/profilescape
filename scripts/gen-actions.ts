@@ -119,7 +119,7 @@ export function actionInputs(cardsDefault: readonly string[]): InputSpec[] {
     {
       name: 'include_private',
       default: 'true',
-      description: 'Include private repositories the token can read in aggregated statistics. Set to `false` for public data only.',
+      description: 'Include private repositories the token can read in repository and language statistics. Contribution counts always follow what the token can see, so use the default workflow token for public-only counts.',
     },
     {
       name: 'repos',
@@ -146,7 +146,7 @@ export function actionInputs(cardsDefault: readonly string[]): InputSpec[] {
     {
       name: 'branch',
       default: 'profilescape-output',
-      description: 'Branch that holds the published SVG files. Created on first run and kept to a single commit, so it never bloats your history.',
+      description: 'Dedicated branch that holds the published SVG files. It is replaced wholesale on every publish (a single commit, so it never bloats your history); Profilescape refuses to overwrite your default branch or any branch it did not create.',
     },
     {
       name: 'commit_message',
@@ -448,7 +448,7 @@ export function renderMirrorReadme(entry: ActionEntry, m: Manifest, tag: string)
     '',
     '### Include private contributions',
     '',
-    `The default workflow token only sees public activity. To count private work, create a [personal access token](https://github.com/settings/personal-access-tokens/new) with read-only access to your repositories, save it as a repository secret named \`PROFILESCAPE_TOKEN\` and pass it as \`token\`:`,
+    `The default workflow token only sees public activity. To count private work, create a [fine-grained personal access token](https://github.com/settings/personal-access-tokens/new) for your account with **All repositories** and the read-only **Contents** and **Metadata** repository permissions, save it as a repository secret named \`PROFILESCAPE_TOKEN\` and pass it as \`token\`:`,
     '',
     '```yaml',
     `      - uses: ${uses(m, entry, tag)}`,
@@ -477,7 +477,7 @@ export function renderMirrorReadme(entry: ActionEntry, m: Manifest, tag: string)
     '',
     '## Part of Profilescape',
     '',
-    `${entry.name} is one of a family of focused actions built from the same engine, so every card shares one design language and one set of themes. Mix and match them, or use [${umbrella.name}](${upstream}) to render any combination of cards in a single step.`,
+    `${entry.name} is one of a family of focused actions built from the same engine, so every card shares one design language and one set of themes. To show several cards, use [${umbrella.name}](${upstream}) to render any combination in a single step. Combining actions also works if each step gets its own \`branch\` and only one of them sets \`readme\`.`,
     '',
     '| Action | Renders | Use it |',
     '| --- | --- | --- |',
@@ -544,6 +544,11 @@ export function findDrift(files: Map<string, string>, root = ROOT): Drift[] {
   return drift;
 }
 
+/** Deployment environment of the release workflow jobs that read MIRROR_TOKEN. */
+export const RELEASE_ENVIRONMENT = 'release';
+/** Tags that trigger the release workflow and may deploy to its environment. */
+export const RELEASE_TAG_PATTERN = 'v*.*.*';
+
 /** Shell-quote for the printed gh commands. */
 const sh = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 
@@ -562,6 +567,15 @@ export function repoCommands(m: Manifest): string {
   const templateTopics = ['github-profile', 'profile-readme', 'readme-template', 'github-profile-template', 'profilescape'];
   lines.push(
     `gh repo edit ${m.owner}/${m.template.repo} --template --description ${sh(m.template.description)} --homepage ${sh(m.site)} --add-topic ${templateTopics.join(',')} --enable-wiki=false --enable-projects=false`,
+  );
+  // The release workflow reads MIRROR_TOKEN from this environment; limiting it
+  // to version tags keeps the token away from workflows on any other ref.
+  const env = `repos/${m.owner}/${m.umbrella}/environments/${RELEASE_ENVIRONMENT}`;
+  lines.push(
+    '',
+    `# The "${RELEASE_ENVIRONMENT}" environment that holds MIRROR_TOKEN: only ${RELEASE_TAG_PATTERN} tags may use it.`,
+    `gh api --method PUT ${env} -F 'deployment_branch_policy[protected_branches]=false' -F 'deployment_branch_policy[custom_branch_policies]=true'`,
+    `gh api --method POST ${env}/deployment-branch-policies -f name=${sh(RELEASE_TAG_PATTERN)} -f type=tag`,
   );
   return `${lines.join('\n')}\n`;
 }

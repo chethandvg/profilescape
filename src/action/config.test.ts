@@ -35,7 +35,7 @@ describe('resolveConfig defaults', () => {
     });
     assert.deepEqual(settings, {
       token: 'tok',
-      githubToken: 'tok',
+      githubToken: '',
       history: 'full',
       outputDir: 'profilescape',
       publish: 'branch',
@@ -53,6 +53,10 @@ describe('resolveConfig defaults', () => {
     assert.throws(() => resolveConfig({}), /No username/);
     assert.equal(resolveConfig({}, undefined, { requireUsername: false }).config.username, '');
     assert.throws(() => resolveConfig({ username: 'bad name!' }), /not a valid GitHub username/);
+  });
+
+  it('never writes with the read token', () => {
+    assert.equal(resolveConfig({ username: 'u', token: 'read-pat', github_token: '' }).settings.githubToken, '');
   });
 
   it('uses github_token for publishing when given', () => {
@@ -76,7 +80,7 @@ describe('resolveConfig precedence', () => {
     colors: { accentA: '#ff7a59' },
     darkColors: { panel: '0B0D14', glowOpacity: 0.2 },
     lightColors: { syntax: { keyword: '#123' } },
-    options: { repos: { layout: 'detail' }, Hero: { title: 'Hi' } },
+    options: { repos: { layout: 'detail' }, Hero: { tagline: 'Hi' } },
   };
 
   it('config JSON overrides built-in defaults', () => {
@@ -93,7 +97,7 @@ describe('resolveConfig precedence', () => {
     assert.deepEqual(config.colors, { accentA: '#ff7a59' });
     assert.deepEqual(config.darkColors, { panel: '#0B0D14', glowOpacity: 0.2 }, 'hex colours gain a leading #');
     assert.deepEqual(config.lightColors, { syntax: { keyword: '#123' } });
-    assert.deepEqual(config.options, { repos: { layout: 'detail' }, hero: { title: 'Hi' } });
+    assert.deepEqual(config.options, { repos: { layout: 'detail' }, hero: { tagline: 'Hi' } });
     assert.equal(sources.cards, 'config');
     assert.ok(warnings.some((w) => /options\.repos is set but the "repos" card is not enabled/.test(w)));
   });
@@ -232,5 +236,50 @@ describe('helpers', () => {
   it('validates branch names like git does', () => {
     for (const ok of ['profilescape-output', 'cards/output', 'v1.0']) assert.ok(isValidBranchName(ok), ok);
     for (const bad of ['', 'a b', 'a..b', '-x', 'x.lock', 'x/', '/x', 'a~b', 'a:b', '.hidden', 'x.']) assert.ok(!isValidBranchName(bad), bad);
+  });
+});
+
+describe('per-card options', () => {
+  it('normalises key spelling and warns about unknown keys and unusable values', () => {
+    const { config, warnings } = resolveConfig(
+      { username: 'u', cards: 'repos,languages,stats' },
+      { options: { repos: { layuot: 'detail', description_lines: 2 }, languages: { Layout: 'donut', top: 'eight' }, stats: { 'hide-title': 'nah' } } },
+    );
+    assert.deepEqual(config.options, { repos: { descriptionLines: 2 }, languages: { layout: 'donut', top: 'eight' }, stats: { hideTitle: 'nah' } });
+    assert.ok(warnings.some((w) => /unknown option "options\.repos\.layuot" \(did you mean "layout"\?\)/.test(w)), warnings.join('\n'));
+    assert.ok(warnings.some((w) => /options\.languages\.top must be a number, got "eight"/.test(w)), warnings.join('\n'));
+    assert.ok(warnings.some((w) => /options\.stats\.hideTitle must be true or false/.test(w)), warnings.join('\n'));
+    assert.equal(warnings.length, 3, warnings.join('\n'));
+  });
+
+  it('accepts numeric strings, boolean words and string lists', () => {
+    const { warnings } = resolveConfig(
+      { username: 'u', cards: 'languages,stack' },
+      { options: { languages: { top: '6', hideTitle: 'yes', hide: 'HTML,CSS' }, stack: { icons: ['ts', 'go'] } } },
+    );
+    assert.deepEqual(warnings, []);
+  });
+});
+
+describe('config lists', () => {
+  it('splits list items on line breaks so no value spans log lines', () => {
+    const { config } = resolveConfig({ username: 'u' }, { excludeRepos: ['old-repo\n::warning::injected'], hideLanguages: ['HTML\r\n::error::x'] });
+    assert.deepEqual(config.excludeRepos, ['old-repo', '::warning::injected']);
+    assert.deepEqual(config.hideLanguages, ['HTML', '::error::x']);
+  });
+});
+
+describe('mirror defaults', () => {
+  it("treats the running action's own cards default as not set", () => {
+    const inputs = runnerDefaults({ username: 'u', cards: 'hero,stack,socials' });
+    const json = { cards: ['hero', 'socials'], theme: 'nord' };
+    const mirror = resolveConfig(inputs, json, { ignoreDefaultInputs: true, inputDefaults: { cards: 'hero,stack,socials' } });
+    assert.deepEqual(mirror.config.cards, ['hero', 'socials']);
+    assert.equal(mirror.sources.cards, 'config');
+    assert.deepEqual(mirror.overridden, []);
+    // Without knowing the mirror's default, the input looks explicit and wins (and says so).
+    const unknown = resolveConfig(inputs, json, { ignoreDefaultInputs: true });
+    assert.deepEqual(unknown.config.cards, ['hero', 'stack', 'socials']);
+    assert.deepEqual(unknown.overridden, ['cards']);
   });
 });
