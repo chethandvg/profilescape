@@ -24,7 +24,7 @@ Every input is optional. These are the umbrella action's inputs; the [single-pur
 | Input | Default | Description |
 | --- | --- | --- |
 | `username` | _empty_ | GitHub username to render cards for. Empty uses the owner of the repository running the workflow. |
-| `token` | `${{ github.token }}` | Token used to read profile data from the GitHub API. The default workflow token sees public activity; pass a personal access token (for example `${{ secrets.PROFILESCAPE_TOKEN }}`) to include private repositories and contributions. |
+| `token` | `${{ github.token }}` | Token used to read profile data from the GitHub API. The default workflow token sees public activity; pass a personal access token stored as a secret (for example `PROFILESCAPE_TOKEN`) to include private repositories and contributions. |
 | `cards` | `stats,3d,languages,repos` | Comma-separated cards to render, in README order. Available: `stats`, `languages`, `3d`, `grid`, `repos`, `hero`, `stack`, `socials`. |
 | `theme` | `aurora` | Colour theme id, for example `aurora`. Preview every theme in the playground at https://chethandvg.github.io/profilescape. |
 | `modes` | `dark,light` | Colour modes to render: `dark`, `light` or both. With both, the README markup follows each viewer's GitHub theme automatically. |

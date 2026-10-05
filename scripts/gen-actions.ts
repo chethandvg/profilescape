@@ -78,7 +78,7 @@ export function actionInputs(cardsDefault: readonly string[]): InputSpec[] {
       name: 'token',
       default: '${{ github.token }}',
       description:
-        'Token used to read profile data from the GitHub API. The default workflow token sees public activity; pass a personal access token (for example `${{ secrets.PROFILESCAPE_TOKEN }}`) to include private repositories and contributions.',
+        'Token used to read profile data from the GitHub API. The default workflow token sees public activity; pass a personal access token stored as a secret (for example `PROFILESCAPE_TOKEN`) to include private repositories and contributions.',
     },
     {
       name: 'cards',

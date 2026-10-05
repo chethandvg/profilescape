@@ -599,3 +599,16 @@ describe('repository files', () => {
     assert.match(readme, /## Getting started/);
   });
 });
+
+// GitHub evaluates ${{ }} expressions anywhere in action metadata, including
+// descriptions, and only the github context is available there. An example
+// expression in a description makes every run fail with "Failed to load action.yml".
+test('action metadata descriptions contain no expressions', async () => {
+  const files = ['action.yml', ...readdirSync('mirrors').map((m) => `mirrors/${m}/action.yml`)];
+  for (const file of files) {
+    const text = readFileSync(file, 'utf8');
+    const offending = text.split(/\r?\n/).filter((line) => line.includes('${{') && !/^\s*default: "\$\{\{ github\.token \}\}"$/.test(line));
+    assert.deepEqual(offending, [], `${file} must only use \${{ github.token }} as a default`);
+  }
+});
+
