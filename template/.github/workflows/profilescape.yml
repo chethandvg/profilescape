@@ -1,0 +1,32 @@
+name: Profilescape
+
+# Renders your profile cards and keeps README.md up to date between the
+# <!-- profilescape:start --> and <!-- profilescape:end --> markers.
+# Every option: https://github.com/chethandvg/profilescape#inputs
+
+on:
+  schedule:
+    - cron: "23 4 * * *" # every day at 04:23 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: profilescape
+  cancel-in-progress: true
+
+jobs:
+  cards:
+    # Skip the template repository itself; runs in every repository created from it.
+    if: github.repository != 'chethandvg/profilescape-template'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: chethandvg/profilescape@v1
+        with:
+          cards: hero,stats,3d,languages,repos,socials
+          theme: aurora
+          readme: README.md
+          # Optional: add a PROFILESCAPE_TOKEN secret to include private contributions.
+          token: ${{ secrets.PROFILESCAPE_TOKEN || github.token }}

@@ -21,6 +21,8 @@ export function percent(fraction: number, digits = 1): string {
   return `${(fraction * 100).toFixed(digits)}%`;
 }
 
+const valid = (iso: string | null | undefined): iso is string => !!iso && Number.isFinite(Date.parse(iso));
+
 function parts(iso: string): { y: number; m: number; d: number } {
   const [y = '1970', m = '1', d = '1'] = iso.slice(0, 10).split('-');
   return { y: Number(y), m: Number(m), d: Number(d) };
@@ -28,18 +30,21 @@ function parts(iso: string): { y: number; m: number; d: number } {
 
 /** "Jan 30, 2026" */
 export function shortDate(iso: string): string {
+  if (!valid(iso)) return '';
   const { y, m, d } = parts(iso);
   return `${MONTHS[m - 1]} ${String(d).padStart(2, '0')}, ${y}`;
 }
 
 /** "Jan 2026" */
 export function monthYear(iso: string): string {
+  if (!valid(iso)) return '';
   const { y, m } = parts(iso);
   return `${MONTHS[m - 1]} ${y}`;
 }
 
 /** "3 days ago", "2 months ago", "today" */
 export function relativeTime(iso: string, now: Date): string {
+  if (!valid(iso)) return '';
   const days = Math.floor((now.getTime() - new Date(iso).getTime()) / 86_400_000);
   if (days <= 0) return 'today';
   if (days === 1) return 'yesterday';
@@ -52,5 +57,6 @@ export function relativeTime(iso: string, now: Date): string {
 
 /** Whole years between an ISO date and now. */
 export function yearsSince(iso: string, now: Date): number {
+  if (!valid(iso)) return 0;
   return Math.max(0, Math.floor((now.getTime() - new Date(iso).getTime()) / (365.25 * 86_400_000)));
 }

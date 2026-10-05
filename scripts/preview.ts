@@ -54,12 +54,14 @@ const FILES: Record<CardId, string> = {
   repos: 'repos', hero: 'hero', stack: 'stack', socials: 'socials',
 };
 const files: { card: CardId; theme: string; path: string; svg: string }[] = [];
+let failures = 0;
 for (const id of cards) {
   let def: CardDefinition;
   try {
     def = (await import(`../src/cards/${FILES[id]}.ts`)).card;
   } catch (err) {
     console.error(`! ${id}: failed to load (${(err as Error).message})`);
+    failures++;
     continue;
   }
   for (const themeId of themes) {
@@ -71,6 +73,7 @@ for (const id of cards) {
         }
       } catch (err) {
         console.error(`! ${id}/${themeId}/${mode}: render failed (${(err as Error).stack})`);
+        failures++;
       }
     }
   }
@@ -94,4 +97,8 @@ for (const id of cards) {
     }
     console.log(`${base}.svg (${(f.svg.length / 1024).toFixed(1)} KB)`);
   }
+}
+if (failures) {
+  console.error(`${failures} render failure(s)`);
+  process.exitCode = 1;
 }

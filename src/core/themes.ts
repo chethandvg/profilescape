@@ -74,7 +74,7 @@ export function themeList(): { id: string; label: string }[] {
 
 export function getTheme(id: string | undefined): Theme {
   const key = (id ?? DEFAULT_THEME).trim().toLowerCase();
-  return THEMES[key] ?? (THEMES[DEFAULT_THEME] as Theme);
+  return (Object.hasOwn(THEMES, key) ? THEMES[key] : THEMES[DEFAULT_THEME]) as Theme;
 }
 
 export function applyOverrides(base: Palette, ...overrides: (PaletteOverrides | undefined)[]): Palette {
