@@ -211,6 +211,10 @@ export async function graphql<T>(o: FetchOptions, query: string, variables: Reco
     if (attempt) await sleep(baseDelay * 2 ** attempt);
     let res: Response;
     let text: string;
+    // A referenced timer (unlike AbortSignal.timeout, which is unref'd) keeps the
+    // process alive until a stalled request is aborted, on every Node version.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(new DOMException('The operation timed out.', 'TimeoutError')), timeoutMs);
     try {
       res = await doFetch(endpoint, {
         method: 'POST',
@@ -220,12 +224,14 @@ export async function graphql<T>(o: FetchOptions, query: string, variables: Reco
           'User-Agent': 'profilescape',
         },
         body: JSON.stringify({ query, variables }),
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: controller.signal,
       });
       text = await res.text();
     } catch (err) {
       lastError = networkError(err, timeoutMs, endpoint);
       continue;
+    } finally {
+      clearTimeout(timer);
     }
     if (res.status >= 500) {
       lastError = new GitHubError(`GitHub API responded ${res.status}`, res.status);

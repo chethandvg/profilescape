@@ -228,6 +228,8 @@ async function graphql(o, query, variables, opts = {}) {
     if (attempt) await sleep(baseDelay * 2 ** attempt);
     let res;
     let text;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(new DOMException("The operation timed out.", "TimeoutError")), timeoutMs);
     try {
       res = await doFetch(endpoint, {
         method: "POST",
@@ -237,12 +239,14 @@ async function graphql(o, query, variables, opts = {}) {
           "User-Agent": "profilescape"
         },
         body: JSON.stringify({ query, variables }),
-        signal: AbortSignal.timeout(timeoutMs)
+        signal: controller.signal
       });
       text = await res.text();
     } catch (err) {
       lastError = networkError(err, timeoutMs, endpoint);
       continue;
+    } finally {
+      clearTimeout(timer);
     }
     if (res.status >= 500) {
       lastError = new GitHubError(`GitHub API responded ${res.status}`, res.status);
