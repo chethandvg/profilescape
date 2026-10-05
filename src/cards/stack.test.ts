@@ -149,3 +149,11 @@ test('brand colours are adjusted for contrast', () => {
   const tile = drawIcon(resolveIcon('aws'), 0, 0, 40, { color: '#FF9900', inks: [dark.panel, dark.text] });
   assert.match(tile, new RegExp(`fill="${dark.panel}">aws<`));
 });
+
+test('knows data-platform icons and Azure DevOps', async () => {
+  const { resolveIcon } = await import('./icons.ts');
+  for (const name of ['databricks', 'apachespark', 'spark', 'azuredevops', 'ado', 'snowflake', 'airflow']) {
+    assert.equal(resolveIcon(name).known, true, name);
+  }
+  assert.equal(resolveIcon('azuredevops').title, 'Azure DevOps');
+});

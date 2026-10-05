@@ -354,8 +354,19 @@ function joinClauses(parts: string[]): string {
   return out;
 }
 
+/** True when every word of `text` also appears in `location` (a bare place fragment such as "Germany"). */
+function onlyPlaceWords(text: string, location: string): boolean {
+  const words = (s: string) => s.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  const place = new Set(words(location));
+  const own = words(text);
+  return own.length > 0 && own.every((w) => place.has(w));
+}
+
 /** Topics that never describe a focus area. */
-const NOISE_TOPICS = new Set(['hacktoberfest', 'github', 'awesome', 'awesome-list']);
+const NOISE_TOPICS = new Set([
+  'hacktoberfest', 'github', 'awesome', 'awesome-list', 'github-profile', 'profile-readme', 'readme', 'github-readme',
+  'github-actions', 'github-action', 'svg', 'template', 'open-source', 'opensource', 'portfolio', 'cli', 'library',
+]);
 
 /**
  * The most common topics across the public, active repositories the user owns
@@ -373,7 +384,10 @@ export function topTopics(data: ProfileData, limit = 3): string[] {
     }
   }
   // Map iteration keeps first-seen order, and Array.prototype.sort is stable.
+  // A focus is something several repositories share; a topic seen once only
+  // describes that one project, so it is not offered as a focus.
   return [...counts]
+    .filter(([, n]) => n >= 2)
     .sort((a, b) => b[1] - a[1])
     .slice(0, limit)
     .map(([t]) => t);
@@ -663,9 +677,12 @@ function content(ctx: RenderContext, colW: number): Content {
   if (Array.isArray(rawTag)) tagline = rawTag.map((s) => String(s).trim()).filter(Boolean).slice(0, 2);
   else if (typeof rawTag === 'string' && rawTag.trim()) tagline = wrapPx(rawTag.trim(), colW, 17, {}, 2);
   else {
-    // The location is said once: in the status line, else in the tagline.
-    const locationShown = !!location && status.toLowerCase().includes(location.toLowerCase());
-    const parts = copy.rest.filter((c) => !(locationShown && isLocation(c, location)));
+    // The location is said once: in the status line, else in the tagline. A
+    // status that names the city ("Berlin, DE" for "Berlin, Germany") counts.
+    const city = (location.split(',')[0] ?? '').trim().toLowerCase();
+    const statusLower = status.toLowerCase();
+    const locationShown = !!location && (statusLower.includes(location.toLowerCase()) || (city.length > 2 && statusLower.includes(city)));
+    const parts = copy.rest.filter((c) => !(locationShown && (isLocation(c, location) || onlyPlaceWords(c, location))));
     const company = d.company?.trim() ?? '';
     const bioKey = keyOf(d.bio ?? '');
     if (company && !` ${bioKey} `.includes(` ${keyOf(company)} `)) parts.push(`Currently at ${company}.`);

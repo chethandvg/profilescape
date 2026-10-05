@@ -194,15 +194,21 @@ test('real-world bio: role, tagline, location and focus never repeat each other'
   // Display names on chips and in the snippet.
   assert.match(svg, />Jupyter</);
   assert.doesNotMatch(svg, /Jupyter Notebook/);
-  // Focus comes from the most common topics, not the role.
+  // Focus never repeats the role; topics only one repo uses are not a focus, so it is omitted here.
   const code = autoCode(factsFrom(data, 'Chethan', DEMO_NOW), 'csharp', MAX_CODE_CHARS).join('\n');
   assert.doesNotMatch(code, /Software Engineer/);
-  assert.match(code, /Focus = \["react", "design-system"/);
+  assert.doesNotMatch(code, /Focus/);
   assert.match(code, /Stack = \["C#", "Jupyter", "PowerShell"\]/);
 });
 
 test('focus: leftover bio first, then repo topics, else omitted', () => {
-  const base = { ...demoProfile(), location: 'Lisbon' };
+  const demo = demoProfile();
+  // Two repositories share "react" and "design-system", which makes them a focus.
+  const base = {
+    ...demo,
+    location: 'Lisbon',
+    repos: demo.repos.map((r, i) => (i === 5 ? { ...r, topics: [...r.topics, 'react', 'design-system'] } : r)),
+  };
   const facts = (bio: string, extra: Partial<ProfileData> = {}) => factsFrom({ ...base, bio, ...extra }, 'X', DEMO_NOW);
   assert.equal(facts('Platform engineer | Building internal developer platforms').focus, 'Internal developer platforms');
   assert.equal(facts('Platform engineer | Lisbon').focus?.[0], 'react', 'location is never the focus');
@@ -299,4 +305,21 @@ test('status, chips and animation options', () => {
   assert.match(render(demoProfile(), {}, 'dark', false), /\*\{animation:none!important\}/);
   const tagline = render(demoProfile(), { tagline: 'A single custom tagline' });
   assert.match(tagline, /A single custom tagline/);
+});
+
+test('does not fall back to a bare location fragment as the tagline', async () => {
+  const { demoProfile, DEMO_NOW } = await import('../core/fixtures.ts');
+  const { getTheme } = await import('../core/themes.ts');
+  const data = { ...demoProfile(), bio: 'Software Engineer · .NET · Azure · Applied AI | Berlin', location: 'Berlin, Germany', company: null, repos: [] };
+  const theme = getTheme('aurora');
+  const [img] = card.render({ data, theme, palette: theme.dark, mode: 'dark', options: { status: 'open to remote opportunities · Berlin, DE' }, animate: true, now: DEMO_NOW });
+  const desc = /<desc>([^<]*)<\/desc>/.exec(img?.svg ?? '')?.[1] ?? '';
+  assert.ok(!/Germany/.test(desc), desc);
+  assert.match(desc, /Building in public on GitHub since/);
+});
+
+test('focus ignores topics that only one repository uses', () => {
+  const data = { ...demoProfile(), bio: 'Platform engineer' };
+  assert.deepEqual(topTopics(data, 5), []);
+  assert.equal(factsFrom(data, 'X', DEMO_NOW).focus, undefined);
 });

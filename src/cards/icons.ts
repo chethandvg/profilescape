@@ -38,6 +38,7 @@ const MONOGRAMS: Record<string, { title: string; hex: string; text: string; cate
   awslambda: { title: 'AWS Lambda', hex: 'FF9900', text: 'λ', category: 'cloud' },
   amazondynamodb: { title: 'DynamoDB', hex: '4053D6', text: 'DDB', category: 'data' },
   microsoftazure: { title: 'Azure', hex: '0078D4', text: 'Az', category: 'cloud' },
+  azuredevops: { title: 'Azure DevOps', hex: '0078D7', text: 'AD', category: 'devops' },
   microsoft: { title: 'Microsoft', hex: '5E5E5E', text: 'MS', category: 'tool' },
   microsoftsqlserver: { title: 'SQL Server', hex: 'CC2927', text: 'SQL', category: 'data' },
   windows: { title: 'Windows', hex: '0078D4', text: 'Win', category: 'tool' },
@@ -104,7 +105,7 @@ export const ALIASES: Readonly<Record<string, string>> = {
   k8s: 'kubernetes', kube: 'kubernetes', postgres: 'postgresql', pg: 'postgresql', psql: 'postgresql',
   mongo: 'mongodb', elastic: 'elasticsearch', kafka: 'apachekafka', aws: 'amazonwebservices',
   amazon: 'amazonwebservices', amazonaws: 'amazonwebservices', lambda: 'awslambda', dynamodb: 'amazondynamodb',
-  azure: 'microsoftazure', msazure: 'microsoftazure', gcp: 'googlecloud', gcloud: 'googlecloud',
+  azure: 'microsoftazure', msazure: 'microsoftazure', ado: 'azuredevops', spark: 'apachespark', airflow: 'apacheairflow', gcp: 'googlecloud', gcloud: 'googlecloud',
   googlecloudplatform: 'googlecloud', sqlserver: 'microsoftsqlserver', mssql: 'microsoftsqlserver',
   fly: 'flydotio', flyio: 'flydotio', gha: 'githubactions', actions: 'githubactions', gh: 'github',
   // tools & OS

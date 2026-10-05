@@ -29,7 +29,7 @@ const CURATED: Record<string, string[]> = {
   runtime: ['nodedotjs', 'deno', 'bun', 'nuget', 'npm', 'pnpm', 'yarn'],
   data: [
     'postgresql', 'mysql', 'mariadb', 'sqlite', 'mongodb', 'redis', 'supabase', 'firebase', 'neo4j', 'duckdb',
-    'elasticsearch', 'apachekafka', 'rabbitmq',
+    'elasticsearch', 'apachekafka', 'rabbitmq', 'databricks', 'apachespark', 'snowflake', 'apacheairflow',
   ],
   ai: [
     'pytorch', 'tensorflow', 'scikitlearn', 'numpy', 'pandas', 'jupyter', 'opencv', 'huggingface', 'anthropic',
