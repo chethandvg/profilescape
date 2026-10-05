@@ -7,7 +7,7 @@ import { parseArgs } from "node:util";
 // package.json
 var package_default = {
   name: "profilescape",
-  version: "1.0.0",
+  version: "1.0.1",
   private: true,
   description: "Self-hosted, beautiful GitHub profile cards: 3D contribution graph, stats, languages, repo cards, hero banner and more. Runs as a GitHub Action with your own token, so no rate limits and no servers.",
   type: "module",
