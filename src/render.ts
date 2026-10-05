@@ -28,7 +28,7 @@ export interface RenderedFile {
   alt: string;
   svg: string;
   link?: string;
-  layout: 'full' | 'half';
+  layout: 'full' | 'half' | 'inline';
 }
 
 export function renderCards(req: RenderRequest): RenderedFile[] {
@@ -83,6 +83,13 @@ export function readmeMarkup(files: RenderedFile[], baseUrl: string): string {
   for (const f of files) groups.set(f.name, [...(groups.get(f.name) ?? []), f]);
   const blocks: string[] = [];
   const pending: RenderedFile[][] = [];
+  const inline: RenderedFile[][] = [];
+  const flushInline = () => {
+    if (!inline.length) return;
+    const items = inline.map((g) => picture(baseUrl, g, 'auto').replace(' width="auto"', ''));
+    blocks.push(`<p align="center">\n${items.join('\n')}\n</p>`);
+    inline.length = 0;
+  };
   const flushHalves = () => {
     for (let i = 0; i < pending.length; i += 2) {
       const cells = pending.slice(i, i + 2).map((g) => `    <td width="50%">\n${picture(baseUrl, g, '100%')}\n    </td>`);
@@ -91,12 +98,14 @@ export function readmeMarkup(files: RenderedFile[], baseUrl: string): string {
     pending.length = 0;
   };
   for (const group of groups.values()) {
-    if ((group[0] as RenderedFile).layout === 'half') pending.push(group);
-    else {
-      flushHalves();
-      blocks.push(picture(baseUrl, group, '100%'));
-    }
+    const layout = (group[0] as RenderedFile).layout;
+    if (layout !== 'inline') flushInline();
+    if (layout !== 'half') flushHalves();
+    if (layout === 'half') pending.push(group);
+    else if (layout === 'inline') inline.push(group);
+    else blocks.push(picture(baseUrl, group, '100%'));
   }
+  flushInline();
   flushHalves();
   return blocks.join('\n\n');
 }

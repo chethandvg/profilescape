@@ -6,7 +6,8 @@ import { demoProfile, DEMO_NOW, emptyProfile } from '../src/core/fixtures.ts';
 import { fetchProfile } from '../src/core/github.ts';
 import { themeIds } from '../src/core/themes.ts';
 import { CARD_IDS, type CardId, type Mode } from '../src/core/types.ts';
-import { renderCards } from '../src/render.ts';
+import { applyOverrides, getTheme } from '../src/core/themes.ts';
+import type { CardDefinition } from '../src/core/types.ts';
 
 /**
  * Render cards to SVG + PNG for visual review.
@@ -44,18 +45,39 @@ if (values.user) {
   now = new Date();
   data = await fetchProfile({ token, login: values.user, now, log: console.log });
 }
-const parsedOpts = values.opts ? JSON.parse(values.opts) : undefined;
+const parsedOpts = values.opts ? JSON.parse(values.opts) : {};
 
-for (const theme of themes) {
-  const files = renderCards({
-    data,
-    cards,
-    theme,
-    modes,
-    now,
-    options: parsedOpts ? Object.fromEntries(cards.map((c) => [c, parsedOpts])) : undefined,
-  });
+// Card modules are imported one by one (not via the registry) so a card that is
+// mid-edit or broken only affects its own preview.
+const FILES: Record<CardId, string> = {
+  stats: 'stats', languages: 'languages', '3d': 'landscape', grid: 'grid',
+  repos: 'repos', hero: 'hero', stack: 'stack', socials: 'socials',
+};
+const files: { card: CardId; theme: string; path: string; svg: string }[] = [];
+for (const id of cards) {
+  let def: CardDefinition;
+  try {
+    def = (await import(`../src/cards/${FILES[id]}.ts`)).card;
+  } catch (err) {
+    console.error(`! ${id}: failed to load (${(err as Error).message})`);
+    continue;
+  }
+  for (const themeId of themes) {
+    const theme = getTheme(themeId);
+    for (const mode of modes) {
+      try {
+        for (const img of def.render({ data, theme, palette: applyOverrides(theme[mode]), mode, options: parsedOpts, animate: true, now })) {
+          files.push({ card: id, theme: themeId, path: `${img.name}-${mode}.svg`, svg: img.svg });
+        }
+      } catch (err) {
+        console.error(`! ${id}/${themeId}/${mode}: render failed (${(err as Error).stack})`);
+      }
+    }
+  }
+}
+{
   for (const f of files) {
+    const theme = f.theme;
     const dir = join(values.out, f.card, theme);
     mkdirSync(dir, { recursive: true });
     const base = join(dir, f.path.replace(/\.svg$/, ''));

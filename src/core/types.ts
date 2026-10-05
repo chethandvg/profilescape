@@ -156,8 +156,11 @@ export interface CardImage {
   svg: string;
   /** Where the image should link to in generated markdown. */
   link?: string;
-  /** Layout hint for generated markdown: half-width images are paired in a 2-column table. */
-  layout?: 'full' | 'half';
+  /**
+   * Layout hint for generated markdown: half-width images are paired in a
+   * 2-column table; inline images (e.g. badges) flow side by side, centred.
+   */
+  layout?: 'full' | 'half' | 'inline';
 }
 
 export interface OptionDoc {

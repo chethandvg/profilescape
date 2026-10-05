@@ -1,4 +1,5 @@
 import { mix, shade } from './svg.ts';
+import { PRESETS } from './theme-presets.ts';
 import type { Mode, Palette, PaletteOverrides, Theme } from './types.ts';
 
 /** Profilescape's signature theme: violet rising into cyan. */
@@ -59,14 +60,16 @@ const aurora: Theme = {
   },
 };
 
-export const THEMES: Record<string, Theme> = {
-  aurora,
-};
+export const THEMES: Record<string, Theme> = Object.fromEntries([aurora, ...PRESETS].map((t) => [t.id, t]));
 
 export const DEFAULT_THEME = 'aurora';
 
 export function themeIds(): string[] {
   return Object.keys(THEMES);
+}
+
+export function themeList(): { id: string; label: string }[] {
+  return Object.values(THEMES).map((t) => ({ id: t.id, label: t.label }));
 }
 
 export function getTheme(id: string | undefined): Theme {
