@@ -1,0 +1,7 @@
+node_modules/
+preview/
+site/dist/
+coverage/
+*.log
+.DS_Store
+# dist/ is committed on purpose: GitHub Actions run the bundled dist/index.mjs.

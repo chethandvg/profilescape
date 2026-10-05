@@ -1,0 +1,49 @@
+{
+  "name": "profilescape",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Self-hosted, beautiful GitHub profile cards: 3D contribution graph, stats, languages, repo cards, hero banner and more. Runs as a GitHub Action with your own token, so no rate limits and no servers.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Chethan D V",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chethandvg/profilescape.git"
+  },
+  "homepage": "https://chethandvg.github.io/profilescape",
+  "keywords": [
+    "github-profile",
+    "github-readme-stats",
+    "readme",
+    "profile-readme",
+    "github-actions",
+    "svg",
+    "contributions",
+    "3d-contribution-graph",
+    "stats-card"
+  ],
+  "engines": {
+    "node": ">=22.18"
+  },
+  "bin": {
+    "profilescape": "dist/cli.mjs"
+  },
+  "scripts": {
+    "build": "node scripts/build.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test \"src/**/*.test.ts\" \"scripts/**/*.test.ts\"",
+    "preview": "node scripts/preview.ts",
+    "gen:icons": "node scripts/gen-icons.ts",
+    "gen:actions": "node scripts/gen-actions.ts",
+    "gallery": "node scripts/gallery.ts",
+    "site": "node scripts/site.ts",
+    "check": "npm run typecheck && npm test && npm run build"
+  },
+  "devDependencies": {
+    "@resvg/resvg-js": "^2.6.2",
+    "@types/node": "^26.6.4",
+    "esbuild": "^0.28.2",
+    "simple-icons": "^16.34.0",
+    "typescript": "^7.0.2"
+  }
+}
