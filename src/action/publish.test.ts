@@ -16,7 +16,10 @@ function mockGitHub(routes: Record<string, Handler | { status: number; body?: un
   const calls: Call[] = [];
   const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
-    assert.ok(url.startsWith(root), `unexpected host in ${url}`);
+    // Exact origin compare plus a prefix that ends at a path boundary (a bare prefix check would also
+    // accept https://api.github.com.example.org/...).
+    assert.equal(new URL(url).origin, new URL(root).origin, `unexpected host in ${url}`);
+    assert.ok(url.startsWith(`${root}/`), `unexpected API path in ${url}`);
     const call: Call = {
       method: init?.method ?? 'GET',
       path: url.slice(root.length),

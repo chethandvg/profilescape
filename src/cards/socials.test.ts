@@ -134,9 +134,9 @@ test('unsafe URLs are dropped and labels are escaped', () => {
   assert.equal(images.length, 1);
   const [img] = images;
   assert.equal(img?.link, 'https://example.com');
-  assert.doesNotMatch(img?.svg ?? '', /<script/);
+  assert.doesNotMatch(img?.svg ?? '', /<script/i);
   assert.match(img?.svg ?? '', /&lt;script&gt;&amp;&quot;&#39;/);
-  assert.match(img?.alt ?? '', /<script>/, 'alt is raw text; render.ts escapes it in markup');
+  assert.ok(img?.alt.includes(HOSTILE), 'alt is raw text; render.ts escapes it in markup');
 });
 
 test('icon style, handles and duplicate names', () => {

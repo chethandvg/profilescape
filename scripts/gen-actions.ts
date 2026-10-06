@@ -353,8 +353,25 @@ export function renderActionYml(entry: ActionEntry, m: Manifest): string {
 
 // --------------------------------------------------------------- Markdown
 
-/** Escape text for a Markdown table cell (code spans keep their content). */
-const cell = (text: string) => text.replace(/\|/g, '\\|');
+/**
+ * Escape the content of a code span that sits in a Markdown table cell. Only pipes are escaped:
+ * GFM strips the backslash of every `\|` in a table row before inline parsing, and code spans never
+ * unescape `\\`, so escaping backslashes here would print them twice.
+ */
+export const codeSpanPipes = (text: string) => text.replaceAll('|', '\\|');
+/** Escape prose (outside code spans) for a Markdown table cell: backslashes and pipes. */
+export const escapeProse = (text: string) => text.replace(/[\\|]/g, '\\$&');
+/** Escape text for a Markdown table cell; `prose` handles the parts outside code spans. */
+export const tableCell = (text: string, prose: (part: string) => string = escapeProse) =>
+  text
+    .split(/(`[^`]*`)/)
+    .map((part, i) => (i % 2 ? codeSpanPipes(part) : prose(part)))
+    .join('');
+/** A code span for a Markdown table cell. */
+export const tableCode = (text: string) => {
+  const escaped = codeSpanPipes(text);
+  return text.includes('`') ? `\`\` ${escaped} \`\`` : `\`${escaped}\``;
+};
 const code = (text: string) => (text.includes('`') ? `\`\` ${text} \`\`` : `\`${text}\``);
 const repoUrl = (m: Manifest, repo: string) => `https://github.com/${m.owner}/${repo}`;
 const uses = (m: Manifest, entry: ActionEntry, tag: string) => `${m.owner}/${entry.repo}@${tag}`;
@@ -391,13 +408,14 @@ export function renderMirrorReadme(entry: ActionEntry, m: Manifest, tag: string)
   ];
 
   const inputs = actionInputs(entry.cards).map(
-    (i) => `| ${code(i.name)} | ${i.default === '' ? '_empty_' : code(i.default)} | ${cell(i.description)} |`,
+    (i) => `| ${tableCode(i.name)} | ${i.default === '' ? '_empty_' : tableCode(i.default)} | ${tableCell(i.description)} |`,
   );
-  const outputs = ACTION_OUTPUTS.map((o) => `| ${code(o.name)} | ${cell(o.description)} |`);
+  const outputs = ACTION_OUTPUTS.map((o) => `| ${tableCode(o.name)} | ${tableCell(o.description)} |`);
   const family = m.actions.map((a) => {
     const label = a.repo === entry.repo ? `**${a.name}** (this action)` : `[${a.name}](${repoUrl(m, a.repo)})`;
-    const what = a.repo === m.umbrella ? `any card (default: ${a.cards.map(code).join(', ')})` : a.cards.map(code).join(', ');
-    return `| ${label} | ${what} | ${code(uses(m, a, tag))} |`;
+    const cards = a.cards.map(tableCode).join(', ');
+    const what = a.repo === m.umbrella ? `any card (default: ${cards})` : cards;
+    return `| ${label} | ${what} | ${tableCode(uses(m, a, tag))} |`;
   });
 
   return [

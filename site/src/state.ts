@@ -50,20 +50,29 @@ export function normalizeHex(value: unknown): string | undefined {
   return m ? `#${(m[1] as string).toUpperCase()}` : undefined;
 }
 
-function cleanColors(value: unknown): ColorOverrides {
-  const out: ColorOverrides = {};
-  if (typeof value !== 'object' || value === null) return out;
-  for (const key of COLOR_KEYS) {
-    const hex = normalizeHex((value as Record<string, unknown>)[key]);
-    if (hex) out[key] = hex;
-  }
-  return out;
+/**
+ * The registry's own id equal to `value`, or undefined. State can come from a
+ * shared link, so every computed key written into an options record is the
+ * constant from CARD_IDS rather than the incoming string.
+ */
+export function toCardId(value: unknown): CardId | undefined {
+  return CARD_IDS.find((id) => id === value);
+}
+
+/** Store one card's options, or drop the entry when they are empty or missing. */
+export function setCardOptions(state: PlaygroundState, id: CardId, options: CardOptions | undefined): void {
+  const key = toCardId(id);
+  if (!key) return;
+  if (options && Object.keys(options).length) state.options[key] = options;
+  else delete state.options[key];
 }
 
 /** Options for the selected cards only, without unknown keys or default values. */
 export function activeOptions(state: PlaygroundState): Partial<Record<CardId, CardOptions>> {
   const out: Partial<Record<CardId, CardOptions>> = {};
-  for (const id of state.cards) {
+  for (const card of state.cards) {
+    const id = toCardId(card);
+    if (!id) continue;
     const clean = cleanOptions(CARDS[id], state.options[id]);
     if (Object.keys(clean).length) out[id] = clean;
   }
@@ -76,13 +85,19 @@ function encodeColors(c: ColorOverrides): string {
 }
 
 function decodeColors(text: string | null): ColorOverrides {
-  if (!text) return {};
-  const obj: Record<string, string> = {};
+  const out: ColorOverrides = {};
+  if (!text) return out;
+  // A Map keeps link-supplied names away from object keys; only known colour keys are read back.
+  const pairs = new Map<string, string>();
   for (const part of text.split(',')) {
     const [k, v] = part.split(':');
-    if (k && v) obj[k.trim()] = v.trim();
+    if (k && v) pairs.set(k.trim(), v.trim());
   }
-  return cleanColors(obj);
+  for (const key of COLOR_KEYS) {
+    const hex = normalizeHex(pairs.get(key));
+    if (hex) out[key] = hex;
+  }
+  return out;
 }
 
 /** Query string for the state (without the prefix); empty for the default state. */
@@ -117,10 +132,11 @@ export function decodeState(hash: string): PlaygroundState {
   const state = defaultState();
   if (!isStateHash(hash)) return state;
   const p = new URLSearchParams(hash.slice(HASH_PREFIX.length));
-  const cards = (p.get('cards') ?? '')
-    .split(',')
-    .map((s) => s.trim().toLowerCase())
-    .filter((s, i, all): s is CardId => (CARD_IDS as readonly string[]).includes(s) && all.indexOf(s) === i);
+  const cards: CardId[] = [];
+  for (const part of (p.get('cards') ?? '').split(',')) {
+    const id = toCardId(part.trim().toLowerCase());
+    if (id && !cards.includes(id)) cards.push(id);
+  }
   if (p.has('cards') && cards.length) state.cards = cards;
   const theme = (p.get('theme') ?? '').trim().toLowerCase();
   if (themeIds().includes(theme)) state.theme = theme;

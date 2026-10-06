@@ -129,7 +129,7 @@ describe('action run()', () => {
     assert.equal(code, 0, t.lines.join('\n'));
     const out = t.outputs();
     assert.equal(out.base_url, 'https://raw.githubusercontent.com/mira-dev/mira-dev/profilescape-output');
-    assert.match(out.markup as string, /https:\/\/raw\.githubusercontent\.com\/mira-dev\/mira-dev\/profilescape-output\/stats-dark\.svg/);
+    assert.ok((out.markup as string).includes(`src="${out.base_url}/stats-dark.svg"`), out.markup as string);
 
     const tree = calls.find((c) => c.url.endsWith('/git/trees'));
     assert.deepEqual(tree?.body.tree.map((e: any) => e.path), ['README-snippet.md', 'README.md', 'stats-dark.svg']);

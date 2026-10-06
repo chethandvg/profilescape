@@ -12,6 +12,17 @@ import { configFile, inlineConfig, workflowYaml } from '../site/src/output.ts';
 import { decodeState, defaultState, stateToHash } from '../site/src/state.ts';
 import { buildSite, type SiteBuild } from './site.ts';
 
+/** Drop HTML tags, repeating until nothing changes so removing one tag cannot splice another together. */
+function stripTags(html: string): string {
+  let text = html;
+  let previous: string;
+  do {
+    previous = text;
+    text = text.replace(/<[^>]+>/g, '');
+  } while (text !== previous);
+  return text;
+}
+
 describe('site build', () => {
   let dir = '';
   let result: SiteBuild;
@@ -45,7 +56,7 @@ describe('site build', () => {
     assert.match(html, /<meta name="description" content="[^"]{50,}"/);
     assert.match(html, /property="og:title"/);
     assert.match(html, /uses: chethandvg\/profilescape-3d@v1/);
-    assert.match(html.replace(/<[^>]+>/g, ''), /Preview uses demo data - your real data is rendered by the Action in your repo/);
+    assert.match(stripTags(html), /Preview uses demo data - your real data is rendered by the Action in your repo/);
   });
 
   test('the quick start shows a complete workflow and a CLI command that runs anywhere', () => {
@@ -53,7 +64,7 @@ describe('site build', () => {
     const text = (label: string) => {
       const m = new RegExp(`aria-label="${label}"><code>([\\s\\S]*?)</code>`).exec(html);
       assert.ok(m?.[1], `${label} snippet exists`);
-      return m[1].replace(/<[^>]+>/g, '').replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+      return stripTags(m[1]).replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
     };
     const workflow = text('Minimal workflow');
     for (const line of ['name: Profilescape', 'on:', '  schedule:', '  workflow_dispatch:', 'permissions:', '  contents: write', 'jobs:', '    runs-on: ubuntu-latest', '    steps:', '      - uses: chethandvg/profilescape@v1', '          readme: README.md']) {

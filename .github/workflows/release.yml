@@ -168,11 +168,21 @@ jobs:
       MAJOR: ${{ needs.verify.outputs.major }}
       PRERELEASE: ${{ needs.verify.outputs.prerelease }}
     steps:
+      # The commit the pushed tag pointed to when this run was triggered; the
+      # next step proves it is the commit the verify job tested.
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.verify.outputs.sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
+
+      - name: Check this is the verified commit
+        run: |
+          head="$(git rev-parse HEAD)"
+          if [ "$head" != "$SHA" ]; then
+            echo "::error title=Unverified commit::Checked out $head, but the verify job tested $SHA. Nothing was published to $REPO."
+            exit 1
+          fi
 
       - name: Push the release to the mirror
         id: push
@@ -259,11 +269,23 @@ jobs:
     permissions:
       contents: read
     steps:
+      # The commit the pushed tag pointed to when this run was triggered; the
+      # next step proves it is the commit the verify job tested.
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.verify.outputs.sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
+
+      - name: Check this is the verified commit
+        env:
+          SHA: ${{ needs.verify.outputs.sha }}
+        run: |
+          head="$(git rev-parse HEAD)"
+          if [ "$head" != "$SHA" ]; then
+            echo "::error title=Unverified commit::Checked out $head, but the verify job tested $SHA. The template repository was not changed."
+            exit 1
+          fi
 
       - name: Push template/ to the template repository
         env:

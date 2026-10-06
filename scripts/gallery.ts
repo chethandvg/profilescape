@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -8,7 +8,7 @@ import { esc, MONO, n, SANS, shade, textWidth, tint } from '../src/core/svg.ts';
 import { contribRamp, DEFAULT_THEME, getTheme, themeList } from '../src/core/themes.ts';
 import { CARD_IDS, type CardId, type CardOptions, type Mode, type OptionDoc } from '../src/core/types.ts';
 import { renderCards } from '../src/render.ts';
-import { ACTION_OUTPUTS, actionInputs, loadManifest, majorTag, umbrellaOf } from './gen-actions.ts';
+import { ACTION_OUTPUTS, actionInputs, escapeProse, loadManifest, majorTag, tableCell, tableCode, umbrellaOf } from './gen-actions.ts';
 
 /**
  * Gallery: the README, docs and Marketplace images, rendered deterministically
@@ -310,15 +310,10 @@ export async function socialPreviewPng(): Promise<Uint8Array> {
 const DESCRIPTIVE_DEFAULTS = new Set(['hero.name', 'hero.role', 'hero.status', 'hero.statusColor', 'hero.codeLanguage', 'hero.codeFile']);
 export const descriptiveDefaultKeys = () => [...DESCRIPTIVE_DEFAULTS];
 
-/** Escape prose for a Markdown table cell: pipes everywhere, angle brackets outside code spans. */
+/** Escape prose for a Markdown table cell: pipes everywhere; backslashes and angle brackets outside code spans. */
 export const cell = (text: string) =>
-  text
-    .replace(/\n/g, ' ')
-    .split(/(`[^`]*`)/)
-    .map((part, i) => (i % 2 ? part : part.replace(/</g, '&lt;').replace(/>/g, '&gt;')))
-    .join('')
-    .replace(/\|/g, '\\|');
-const code = (text: string) => (text.includes('`') ? `\`\` ${text} \`\`` : `\`${text.replace(/\|/g, '\\|')}\``);
+  tableCell(text.replace(/\n/g, ' '), (part) => escapeProse(part).replace(/</g, '&lt;').replace(/>/g, '&gt;'));
+const code = tableCode;
 
 export function formatDefault(card: CardId, o: OptionDoc): string {
   if (o.default === undefined) return '_see description_';
@@ -384,6 +379,16 @@ export function applyBlocks(text: string, blocks: Map<string, string>): { text: 
 
 // ----------------------------------------------------------------- main
 
+/** Run a read, mapping "file not found" to `undefined` (no separate existence check that could go stale before the use). */
+function unlessMissing<T>(read: () => T): T | undefined {
+  try {
+    return read();
+  } catch (error) {
+    if ((error as { code?: unknown }).code === 'ENOENT') return undefined;
+    throw error;
+  }
+}
+
 function main(): void {
   const { values } = parseArgs({ options: { check: { type: 'boolean', default: false }, 'no-png': { type: 'boolean', default: false } } });
   const dir = join(ROOT, IMAGES_DIR);
@@ -392,10 +397,10 @@ function main(): void {
   let changed = 0;
 
   // Images
-  const existing = existsSync(dir) ? readdirSync(dir) : [];
+  const existing = unlessMissing(() => readdirSync(dir)) ?? [];
   for (const [name, svg] of files) {
     const path = join(dir, name);
-    const current = existsSync(path) ? readFileSync(path, 'utf8') : undefined;
+    const current = unlessMissing(() => readFileSync(path, 'utf8'));
     if (current === svg) continue;
     if (values.check) problems.push(`${IMAGES_DIR}/${name} is ${current === undefined ? 'missing' : 'out of date'}`);
     else {
@@ -417,8 +422,8 @@ function main(): void {
   const blocks = referenceBlocks();
   for (const rel of DOC_FILES) {
     const path = join(ROOT, rel);
-    if (!existsSync(path)) continue;
-    const current = readFileSync(path, 'utf8');
+    const current = unlessMissing(() => readFileSync(path, 'utf8'));
+    if (current === undefined) continue;
     const { text, unknown } = applyBlocks(current, blocks);
     for (const u of unknown) problems.push(`${rel}: unknown generated block "${u}"`);
     if (text === current) continue;

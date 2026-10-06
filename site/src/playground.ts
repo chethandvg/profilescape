@@ -18,6 +18,7 @@ import {
   isStateHash,
   type PlaygroundState,
   type PreviewMode,
+  setCardOptions,
   stateToHash,
 } from './state.ts';
 
@@ -435,7 +436,7 @@ export function initPlayground(data: ProfileData): Playground {
           type: 'button',
           class: 'btn btn-ghost btn-sm',
           onclick: () => {
-            delete state.options[id];
+            setCardOptions(state, id, undefined);
             buildOptions(`${id}-reset`);
             schedule();
             announce(`${card.title} options reset.`);
@@ -452,8 +453,7 @@ export function initPlayground(data: ProfileData): Playground {
     const opts = { ...(state.options[id] ?? {}) };
     if (value === undefined) delete opts[key];
     else opts[key] = value;
-    if (Object.keys(opts).length) state.options[id] = opts;
-    else delete state.options[id];
+    setCardOptions(state, id, opts);
   }
 
   function fieldControl(id: CardId, field: Field): HTMLElement {

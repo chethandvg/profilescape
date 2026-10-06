@@ -33,6 +33,17 @@ const DOCS = ['README.md', 'docs/cards.md', 'docs/configuration.md', 'docs/theme
 
 const ids = (svg: string) => [...svg.matchAll(/\sid="([^"]+)"/g)].map((m) => m[1] as string);
 
+/** Drop HTML tags, repeating until nothing changes so removing one tag cannot splice another together. */
+function stripTags(html: string): string {
+  let text = html;
+  let previous: string;
+  do {
+    previous = text;
+    text = text.replace(/<[^>]*>/g, '');
+  } while (text !== previous);
+  return text;
+}
+
 /** Heading anchors as GitHub generates them: lowercase, punctuation dropped, each space a hyphen, repeats numbered. */
 function headingAnchors(markdown: string): Set<string> {
   const out = new Set<string>();
@@ -42,8 +53,7 @@ function headingAnchors(markdown: string): Set<string> {
     if (/^\s*(?:```|~~~)/.test(line)) fenced = !fenced;
     const heading = fenced ? null : /^#{1,6}\s+(.+?)\s*#*\s*$/.exec(line);
     if (!heading) continue;
-    const base = (heading[1] as string)
-      .replace(/<[^>]*>/g, '')
+    const base = stripTags(heading[1] as string)
       .toLowerCase()
       .replace(/[^\p{L}\p{N}\s_-]/gu, '')
       .trim()
@@ -178,6 +188,9 @@ describe('reference tables', () => {
 
   test('cell() escapes HTML outside code spans only', () => {
     assert.equal(cell('a <b> `<!-- x -->` | c'), 'a &lt;b&gt; `<!-- x -->` \\| c');
+    // Prose backslashes are escaped (so a literal `\|` keeps its backslash); code spans only get their
+    // pipes escaped, because GFM's table parser removes exactly one backslash per escaped pipe.
+    assert.equal(cell('a\\|b `c\\|d`'), 'a\\\\\\|b `c\\\\|d`');
   });
 
   test('applyBlocks replaces known blocks and reports unknown ones', () => {
